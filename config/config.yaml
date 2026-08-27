@@ -1,0 +1,76 @@
+# =============================================================================
+#  IntelliBI Sales Automation — central configuration
+#  ---------------------------------------------------------------------------
+#  ONE place for environment-specific settings.  common/config_loader.py reads
+#  this file and maps the values onto the environment variables the pipeline
+#  scripts already honour, so you configure the whole project here without
+#  editing any Python.
+#
+#  * Paths may be relative (resolved inside the project) or absolute.
+#  * Leave a value blank to fall back to the script's built-in default.
+#  * SECRETS (service-account key, cookies, app passwords) are NOT stored here.
+#    They live in  credentials/  and are git-ignored.  See credentials/README.
+# =============================================================================
+
+google:
+  # Service-account key file. Relative names resolve inside credentials/.
+  service_account_file: service_account.json
+
+consolidation:                       # Layer 2 — pyConsolidateLeadsLoad.py
+  input_mode: gsheet                 # gsheet (live sheets) | csv (offline test)
+  # Target "IntelliBI Consolidate Sales Tracking Report" sheet:
+  target_sheet_id: "1zZQjXnMJD96Ca0MNyfSt4-XS0z5w3rT7WPdb9qsP1Gs"
+  # Lead-type mapping configuration sheet:
+  lead_type_map_sheet_id: "1b7KbkJ3a8QvL2RVDyEgNdcduzGBbZ0_bsY-gZGK0UMo"
+  export_dir: output/exports         # where Consolidated_Master_Lead.csv/.xlsx land
+
+reports:                             # Layer 3 — both report scripts
+  output_dir: output/reports         # pyConsolidatedLeadPerformanceReport.py
+  followup_output_dir: output/reports  # pyLeadFollowUpAnalysisReport.py
+  history_dir: intellibi_lead_cycle  # optional past exports that enlarge the model
+  dry_run: ""                        # "1" = build locally, do not upload/email
+  followup_dry_run: ""               # "1" = same, for the follow-up report
+
+interakt:                            # Layer 1 — pyInteraktUsers.py
+  # Leave api_key blank to use the saved web session in credentials/interakt_curl.txt
+  api_key: ""
+  load_mode: ""                      # full | incremental (blank = script default)
+
+exotel:                              # Layer 1 — pyExotelCallDetails.py / InboxScrape
+  api_key: ""
+  api_token: ""
+  sid: ""
+  subdomain: ""
+  load_mode: ""                      # blank = script default
+
+email:
+  # Completion-summary log e-mail (sent by scripts/run_all.py). Uses the Gmail
+  # SMTP account configured in credentials/email_config.py.
+  send_log_summary: true
+  log_recipients:
+    - info@intellibiinnovationstechnologies.in
+  attach_layer_logs: true            # attach each layer's .log file to the summary
+
+pipeline:
+  stop_on_failure: true              # abort downstream layers if a critical layer fails
+  script_timeout_seconds: 5400       # per-script hard cap (90 min); "" = no cap
+
+# -----------------------------------------------------------------------------
+#  Reference only — these values currently live inside the report scripts and
+#  are documented here so you know where to change them. They are NOT injected
+#  automatically (kept in-script to preserve the reports' exact behaviour):
+#
+#  Performance report  (sales_reports/pyConsolidatedLeadPerformanceReport.py)
+#     MASTER_SHEET_ID   1zZQjXnMJD96Ca0MNyfSt4-XS0z5w3rT7WPdb9qsP1Gs
+#     ENROLLED_SHEET_ID 1oaXxg3JdtxFp8lFWijIMZKaMZvS0SiglI1K2JTrN2fs
+#     DAILY/WEEKLY/MONTHLY_FOLDER_ID  (Drive output folders)
+#     SEND_EMAIL / EMAIL_RECIPIENTS / MASK_RECIPIENTS
+#
+#  Follow-up report    (sales_reports/pyLeadFollowUpAnalysisReport.py)
+#     RESULT_SHEET_ID / MASTER_SHEET_ID / MEET_SHEET_ID / WALKIN_SHEET_ID
+#     OUTPUT_PARENT_FOLDER_ID
+#     SEND_EMAIL / EMAIL_RECIPIENTS / MASK_RECIPIENTS
+#
+#  Interakt (pyInteraktUsers.py):  DRIVE_FOLDER_ID / SPREADSHEET_NAME / TAB_NAME
+#  Exotel   (pyExotelCallDetails.py): SPREADSHEET_ID / TAB_NAME
+# -----------------------------------------------------------------------------

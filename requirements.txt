@@ -1,0 +1,25 @@
+# =============================================================================
+#  IntelliBI Sales Automation — Python dependencies
+#  Install on any machine with:   pip install -r requirements.txt
+#  (Python 3.10+ recommended.)
+# =============================================================================
+
+# Data handling / spreadsheets
+pandas>=2.0
+openpyxl>=3.1
+python-dateutil>=2.8
+
+# HTTP (Interakt / Exotel APIs + web session)
+requests>=2.31
+
+# Google Sheets / Drive (service-account auth)
+google-api-python-client>=2.100
+google-auth>=2.23
+google-auth-httplib2>=0.1.1
+
+# Headless browser auto-login for Interakt / Exotel web sessions
+#   After install, run once:   python -m playwright install chromium
+playwright>=1.40
+
+# Centralized YAML configuration (config/config.yaml)
+PyYAML>=6.0
