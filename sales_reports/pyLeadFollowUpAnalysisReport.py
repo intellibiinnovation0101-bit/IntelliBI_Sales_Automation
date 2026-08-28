@@ -85,7 +85,7 @@ GENERATE_MONTHLY = True
 GENERATE_MANUAL  = False         # Manual = a custom start/end date range
 
 # Optional manual periods (None -> use today / current week / current month).
-DAILY_DATE            = '2026-08-22'     # "YYYY-MM-DD"
+DAILY_DATE            = None #'2026-08-22'     # "YYYY-MM-DD"
 WEEKLY_REFERENCE_DATE = None     # any day in the wanted week
 MONTHLY_MONTH         = None     # 1-12
 MONTHLY_YEAR          = None
