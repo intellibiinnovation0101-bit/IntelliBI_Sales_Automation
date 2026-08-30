@@ -79,6 +79,17 @@ def now_ist():
 # ═══════════════════════════════════════════════════════════════════════════
 #  CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
+# GENERATE_AUTO = scheduler-friendly automatic selection based on the execution
+# date. When True, the Daily/Weekly/Monthly/Manual flags below are IGNORED for
+# that run and the script decides automatically:
+#     • Daily            -> every run, for the current day
+#     • Weekly           -> only on Monday, for the previous complete Mon–Sun week
+#     • Monthly          -> only on the last calendar day of the month, for that
+#                           whole month (1st → last day)
+# When False, the manual GENERATE_DAILY/WEEKLY/MONTHLY/MANUAL flags are used
+# exactly as before.
+GENERATE_AUTO    = True
+
 GENERATE_DAILY   = True
 GENERATE_WEEKLY  = True
 GENERATE_MONTHLY = True
@@ -3035,23 +3046,46 @@ def run():
 
     # ── periods ──────────────────────────────────────────────────────────────
     jobs = []
-    if GENERATE_DAILY:
+
+    # ── AUTO mode: decide reports from the execution date (ignores the manual
+    #    Daily/Weekly/Monthly/Manual flags for this run) ─────────────────────
+    if GENERATE_AUTO:
+        # Daily — every run, for the current day.
+        st, en = day_bounds(today)
+        jobs.append(("Daily", today.strftime("%d-%b-%Y"), st, en,
+                     f"Lead Follow-Up Analysis - Daily - {today.strftime('%d-%b-%Y')}"))
+        # Weekly — only on Monday, for the previous COMPLETE Mon–Sun week.
+        if today.weekday() == 0:
+            st, en, mon, sun = week_bounds(today - timedelta(days=7))
+            jobs.append(("Weekly",
+                         f"{mon.strftime('%d-%b-%Y')} to {sun.strftime('%d-%b-%Y')}",
+                         st, en,
+                         f"Lead Follow-Up Analysis - Weekly - {mon.strftime('%d-%b-%Y')} to {sun.strftime('%d-%b-%Y')}"))
+        # Monthly — only on the last calendar day of the month, for that whole month.
+        if today.day == calendar.monthrange(today.year, today.month)[1]:
+            st, en, ms, me = month_bounds(today.year, today.month)
+            jobs.append(("Monthly",
+                         f"{ms.strftime('%d-%b-%Y')} to {me.strftime('%d-%b-%Y')}",
+                         st, en, f"Lead Follow-Up Analysis - Monthly - {ms.strftime('%b-%Y')}"))
+
+    # ── MANUAL mode: existing behaviour, unchanged (only runs when AUTO is off) ─
+    if GENERATE_DAILY and not GENERATE_AUTO:
         d = datetime.strptime(DAILY_DATE, "%Y-%m-%d").date() if DAILY_DATE else today
         st, en = day_bounds(d)
         jobs.append(("Daily", d.strftime("%d-%b-%Y"), st, en,
                      f"Lead Follow-Up Analysis - Daily - {d.strftime('%d-%b-%Y')}"))
-    if GENERATE_WEEKLY:
+    if GENERATE_WEEKLY and not GENERATE_AUTO:
         ref = datetime.strptime(WEEKLY_REFERENCE_DATE, "%Y-%m-%d").date() if WEEKLY_REFERENCE_DATE else today
         st, en, mon, sun = week_bounds(ref)
         jobs.append(("Weekly", f"{mon.strftime('%d-%b-%Y')} to {sun.strftime('%d-%b-%Y')}",
                      st, en,
                      f"Lead Follow-Up Analysis - Weekly - {mon.strftime('%d-%b-%Y')} to {sun.strftime('%d-%b-%Y')}"))
-    if GENERATE_MONTHLY:
+    if GENERATE_MONTHLY and not GENERATE_AUTO:
         yr = MONTHLY_YEAR or today.year; mo = MONTHLY_MONTH or today.month
         st, en, ms, me = month_bounds(yr, mo)
         jobs.append(("Monthly", f"{ms.strftime('%d-%b-%Y')} to {me.strftime('%d-%b-%Y')}",
                      st, en, f"Lead Follow-Up Analysis - Monthly - {ms.strftime('%b-%Y')}"))
-    if GENERATE_MANUAL:
+    if GENERATE_MANUAL and not GENERATE_AUTO:
         if not (MANUAL_START_DATE and MANUAL_END_DATE):
             print("  [manual] GENERATE_MANUAL is on but MANUAL_START_DATE / "
                   "MANUAL_END_DATE are not set — skipping the Manual report.")
