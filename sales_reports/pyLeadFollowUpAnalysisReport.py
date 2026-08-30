@@ -114,6 +114,18 @@ RESULT_INACTIVE_TABS = ["IntelliBI Lead Information InActive",
 MASTER_SHEET_ID  = "1zZQjXnMJD96Ca0MNyfSt4-XS0z5w3rT7WPdb9qsP1Gs"   # Consolidate Sales Tracking
 MASTER_TABS      = None          # None -> first tab
 
+# Already-enrolled students. Anyone whose phone appears here is EXCLUDED from all
+# Follow-Up Pending calculations/details (they have already enrolled, so there is
+# nothing to follow up). Read from the "New Enroll" tab (gid below) of:
+#   IntelliBI — Student Admission Responses-New Enroll
+ENROLL_SHEET_ID  = "1oaXxg3JdtxFp8lFWijIMZKaMZvS0SiglI1K2JTrN2fs"
+ENROLL_GID       = 689069678     # the "New Enroll" tab
+ENROLL_TABS      = ["New Enroll", "Enroll", "Enrolled", "Student Admission Responses",
+                    "Admission Responses", "Responses"]
+ENROLL_PHONE_COLS = ["mobile number", "mobile", "phone number", "phone",
+                     "whatsapp number", "whatsapp", "contact number", "contact",
+                     "mobile no", "phone no"]
+
 MEET_SHEET_ID    = "1dlWiU5K7kFi014p8pgH4PbMuoy4QbwMHh48YxNOqjpg"   # Google Meet form
 MEET_TABS        = None          # None -> first tab
 MEET_ATTEND_COL_CANDIDATES = ["LeadAttendanceStatus", "Lead Attendance Status",
@@ -528,6 +540,63 @@ def read_source(sheets, spreadsheet_id, tab_candidates, local_key, optional=Fals
         r = (r + [""] * n)[:n]
         rows.append({header[i]: r[i] for i in range(n)})
     return Table(header, rows)
+
+
+def load_enrolled_phones(sheets):
+    """Return a set of normalized (last-10-digit) phone numbers of students who
+    are ALREADY ENROLLED — read from the New-Enroll tab (ENROLL_GID) of the
+    enrolled-students sheet. These phones are excluded from every Follow-Up
+    Pending calculation and detail. Phone matching is via digits10() so
+    '+91 98765 43210', '98765 43210' and '9876543210' all collapse to the same
+    key. Never raises: on any access problem it returns an empty set and warns,
+    so the report still runs (just without the exclusion)."""
+    if sheets is None or LOCAL_DIR:
+        return set()
+    try:
+        meta = sheets.spreadsheets().get(spreadsheetId=ENROLL_SHEET_ID).execute()
+    except Exception as e:
+        print(f"  [enrolled] sheet {ENROLL_SHEET_ID} not readable ({e}); "
+              f"no enrolled-student exclusion applied.")
+        return set()
+    # locate the exact tab by gid; fall back to a named/first tab if gid missing.
+    title = None
+    for sh in meta.get("sheets", []):
+        if sh.get("properties", {}).get("sheetId") == ENROLL_GID:
+            title = sh["properties"]["title"]
+            break
+    if title is None:
+        titles = [sh["properties"]["title"] for sh in meta.get("sheets", [])]
+        title = pick(titles, *ENROLL_TABS) or (titles[0] if titles else None)
+    if not title:
+        print("  [enrolled] no readable tab; no enrolled-student exclusion applied.")
+        return set()
+    try:
+        resp = sheets.spreadsheets().values().get(
+            spreadsheetId=ENROLL_SHEET_ID, range=title,
+            valueRenderOption="FORMATTED_VALUE").execute()
+    except Exception as e:
+        print(f"  [enrolled] '{title}' values not readable ({e}); "
+              f"no enrolled-student exclusion applied.")
+        return set()
+    values = resp.get("values", [])
+    if not values:
+        return set()
+    header = [h if h else f"col_{i}" for i, h in enumerate(values[0])]
+    ph_col = pick(header, *ENROLL_PHONE_COLS)
+    if not ph_col:
+        print(f"  [enrolled] no phone column found in '{title}' "
+              f"(headers: {header[:8]}...); no enrolled-student exclusion applied.")
+        return set()
+    ci = header.index(ph_col)
+    phones = set()
+    for r in values[1:]:
+        if ci < len(r):
+            d = digits10(r[ci])
+            if len(d) == 10:          # only real 10-digit phones become match keys
+                phones.add(d)
+    print(f"  [enrolled] loaded {len(phones)} enrolled phone(s) from '{title}' "
+          f"(column '{ph_col}') for Follow-Up Pending exclusion.")
+    return phones
 
 
 def resolve_output_folder(drive, parent_id, subfolder_name):
@@ -3044,6 +3113,13 @@ def run():
             _m["counsellor"] = canon_couns_display(_c, _couns_canon)
     apply_counsellor_canon(leads, _couns_canon)
 
+    # Already-enrolled students (by normalized phone) — excluded from every
+    # Follow-Up Pending calculation/detail below. Loaded once (same for all
+    # periods). Empty set = no exclusion (e.g. sheet unreadable).
+    enrolled_phones = load_enrolled_phones(sheets)
+    if enrolled_phones:
+        print(f"Enrolled-student exclusion active: {len(enrolled_phones)} phone(s).")
+
     # ── periods ──────────────────────────────────────────────────────────────
     jobs = []
 
@@ -3131,6 +3207,11 @@ def run():
 
         pending_seen, pending_dataset = set(), []
         for l in active_pending + master_pending:
+            # Exclude already-enrolled students at the BASE pending level, so every
+            # dependent count/detail (Summary, Priority & Actions, Counsellor
+            # Performance, per-counsellor tabs, ranking) stays consistent.
+            if l.get("mobile") and l["mobile"] in enrolled_phones:
+                continue
             k = _key(l)
             if not k or k in pending_seen:
                 continue
@@ -3164,6 +3245,10 @@ def run():
         # pending lead (so its Follow-Up Pending column covers all pending leads).
         disp_seen, display_leads = set(), []
         for l in subset + pending_dataset:
+            # keep the Counsellor Performance follow-up counts consistent with the
+            # excluded pending dataset (drop enrolled students here too).
+            if l.get("mobile") and l["mobile"] in enrolled_phones:
+                continue
             k = _key(l)
             if k in disp_seen:
                 continue
