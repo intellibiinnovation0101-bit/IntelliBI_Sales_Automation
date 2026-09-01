@@ -68,6 +68,7 @@ EMAIL_RECIPIENTS = [
     "harishintellibi@gmail.com",
     "salesintellibi01@gmail.com",
     "info@intellibiinnovationstechnologies.in",
+    "salesintellibi03@gmail.com",
     "163manish.sharma@gmail.com"
 ]
 

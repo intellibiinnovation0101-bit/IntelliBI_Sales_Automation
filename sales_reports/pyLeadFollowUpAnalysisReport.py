@@ -88,7 +88,7 @@ def now_ist():
 #                           whole month (1st → last day)
 # When False, the manual GENERATE_DAILY/WEEKLY/MONTHLY/MANUAL flags are used
 # exactly as before.
-GENERATE_AUTO    = True
+GENERATE_AUTO    = False
 
 GENERATE_DAILY   = True
 GENERATE_WEEKLY  = True
@@ -160,6 +160,7 @@ EMAIL_RECIPIENTS = [
     "harishintellibi@gmail.com",
     "salesintellibi01@gmail.com",
     "info@intellibiinnovationstechnologies.in",
+    "salesintellibi03@gmail.com",
     "163manish.sharma@gmail.com",
 ]
 # Recipients who must NOT receive the link to the full (unmasked) report — they
