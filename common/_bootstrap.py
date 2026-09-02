@@ -25,6 +25,22 @@ import os
 import sys
 from pathlib import Path
 
+# ── Force UTF-8 on this process's stdout/stderr ──────────────────────────────
+# Log/console output across the pipeline contains arrows (→), check-marks (✓),
+# ↳ and similar. In a UTF-8 console / PyCharm those print fine, but under
+# Windows Task Scheduler (or a legacy cp1252 console) Python defaults stdout and
+# stderr to the OS code page, which cannot encode them — every such line then
+# raises 'charmap' UnicodeEncodeError and kills the script. _bootstrap is the
+# very first import in every entry script and runner, so reconfiguring the
+# streams here fixes the whole pipeline in one place. reconfigure() mutates the
+# existing stream in place (Python 3.7+); errors="replace" is a last-resort
+# safety net so output is never fatal. The log FILE is already UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Snapshot env vars the operator set BEFORE we seed any defaults, so config.yaml
 # never overrides a deliberate command-line/OS override.
 _ORIGINAL_ENV_KEYS = set(os.environ)
