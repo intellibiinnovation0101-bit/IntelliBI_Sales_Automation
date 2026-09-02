@@ -62,6 +62,26 @@ WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wan
 MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
 
+# ── Scheduled-run report selection (scheduler only) ──────────────────────────
+# When this script runs through the scheduled Sales pipeline, run_scheduled.py
+# sets INTELLIBI_SCHED_TRIGGER_TIME to the trigger's HH:MM. The report types are
+# then chosen by that scheduled window, OVERRIDING the three flags above:
+#     11:00 / 14:00 / 17:00 / 20:00  → Daily only
+#     23:00                          → Daily + Weekly + Monthly
+# Manual runs (env var absent) are unaffected — the flags above apply exactly as
+# before. This only selects WHICH report types run; every report's data,
+# calculations, formatting and email behaviour is unchanged.
+_SCHED_TRIGGER_TIME = os.environ.get("INTELLIBI_SCHED_TRIGGER_TIME", "").strip()
+if _SCHED_TRIGGER_TIME:
+    try:
+        _sched_hour = int(_SCHED_TRIGGER_TIME.split(":")[0])
+    except (ValueError, IndexError):
+        _sched_hour = -1
+    _sched_full = (_sched_hour == 23)    # the 23:00 window also adds Weekly + Monthly
+    GENERATE_DAILY_REPORT   = True
+    GENERATE_WEEKLY_REPORT  = _sched_full
+    GENERATE_MONTHLY_REPORT = _sched_full
+
 # Email the report links to management?  True / False
 SEND_EMAIL       = True
 EMAIL_RECIPIENTS = [
