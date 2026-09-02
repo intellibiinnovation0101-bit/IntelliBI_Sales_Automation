@@ -57,11 +57,6 @@ GENERATE_WEEKLY_REPORT   = False
 GENERATE_MONTHLY_REPORT  = False
 
 # Optional manual report periods (leave as None to use the defaults below).
-<<<<<<< HEAD
-
-DAILY_REPORT_DATE            = None     # e.g. "2026-07-30"
-=======
->>>>>>> main
 DAILY_REPORT_DATE            = None      ## e.g. "2026-07-30"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
 MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
