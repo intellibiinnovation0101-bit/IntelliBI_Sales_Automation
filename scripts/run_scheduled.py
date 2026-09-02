@@ -142,6 +142,13 @@ def main() -> int:
         return 0
 
     try:
+        # Signal the scheduled trigger time (HH:MM) to the pipeline so that
+        # time-gated reports (e.g. pyConsolidatedLeadPerformanceReport) can pick
+        # which report types to generate by scheduled window. Captured here — the
+        # scheduler entry point — so it stays correct even if a downstream report
+        # runs many minutes later. Manual runs of run_all.py never set this, so
+        # their behaviour is unchanged.
+        os.environ["INTELLIBI_SCHED_TRIGGER_TIME"] = datetime.now().strftime("%H:%M")
         run_all = paths.SCRIPTS_DIR / "run_all.py"
         log.info("[%s] launching %s", args.label, run_all)
         rc = subprocess.call([sys.executable, str(run_all)], cwd=str(paths.PROJECT_ROOT))
