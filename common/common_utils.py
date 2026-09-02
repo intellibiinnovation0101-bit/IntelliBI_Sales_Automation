@@ -94,6 +94,8 @@ def _run_script_once(script_path, log, env, timeout) -> dict:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         for line in proc.stdout:  # stream -> this layer's log + capture
