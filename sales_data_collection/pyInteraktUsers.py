@@ -75,6 +75,13 @@ LOOKBACK_DAYS = 7              # incremental window
 # missing/expired the base sync still runs; enrichment is just skipped.
 ENABLE_ENRICHMENT = True
 
+# Enrichment concurrency: enrich() makes several HTTP calls per customer, so the
+# leads are enriched across a small thread pool to overlap the network waits.
+# Kept deliberately low to respect Interakt's per-minute rate cap (transient
+# 429/5xx are retried with backoff in interakt_enrich._get, so throttled calls
+# are re-tried rather than blanked). Raise cautiously if your plan allows it.
+INTERAKT_ENRICH_WORKERS = 4
+
 # Auto-login: when config_files/interakt_login.json + Playwright are present, the
 # script signs into Interakt itself and refreshes config_files/interakt_curl.txt,
 # so a scheduled run never needs a manual "Copy as cURL" paste. It refreshes when
@@ -483,12 +490,27 @@ def main() -> int:
                     enr.load_lookups()
                     enr.load_conversations()  # labels / assignee / status / last msg
                     log.info("Enriching %s leads via Interakt Inbox APIs...", len(rows))
-                    for i, row in enumerate(rows, 1):
+                    # resolve_traits() is an in-memory id→name lookup; enrich()
+                    # makes the per-customer HTTP calls. Run enrich() across a
+                    # small pool so the network waits overlap. Each row is
+                    # enriched independently and updated in place, so the result
+                    # is identical to the old sequential loop — order does not
+                    # matter. WebAuthError still propagates out to trigger the
+                    # session refresh + single retry below; _get() retries
+                    # transient 429/5xx so throttled calls are re-tried, not
+                    # left blank.
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    for row in rows:
                         row.update(enr.resolve_traits(row))
-                        row.update(enr.enrich(row.get("id", "")))
-                        if i % 20 == 0:
-                            log.info("  enriched %s/%s", i, len(rows))
-                        time.sleep(0.15)   # stay under the per-minute cap
+                    _enriched = 0
+                    with ThreadPoolExecutor(max_workers=INTERAKT_ENRICH_WORKERS) as _ex:
+                        _futs = {_ex.submit(enr.enrich, row.get("id", "")): row
+                                 for row in rows}
+                        for _fut in as_completed(_futs):
+                            _futs[_fut].update(_fut.result())
+                            _enriched += 1
+                            if _enriched % 20 == 0:
+                                log.info("  enriched %s/%s", _enriched, len(rows))
                     enrichment_ran = True
                     conv_map = dict(getattr(enr, "_conv", {}) or {})
                     _mark_enrichment_ok()          # record that the session worked

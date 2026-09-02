@@ -113,12 +113,39 @@ class InteraktEnricher:
 
     # -- low level ----------------------------------------------------------
     def _get(self, url: str) -> Any:
-        r = self.s.get(url, timeout=40)
-        if r.status_code in (401, 403):
-            raise WebAuthError(
-                f"web session rejected (HTTP {r.status_code}); re-capture "
-                "config_files/interakt_curl.txt from a fresh 'Copy as cURL'.")
-        r.raise_for_status()
+        # Retry transient conditions — HTTP 429 (rate limit) and 5xx, plus
+        # network timeouts/connection drops — with exponential backoff. This
+        # keeps enrichment complete under concurrency: a throttled request is
+        # re-tried and succeeds rather than being swallowed into a blank field,
+        # so parallel results match the sequential run. 401/403 still raise
+        # WebAuthError immediately (session refresh), and a persistent failure
+        # after all retries raises exactly as before (caller leaves it blank).
+        _RETRY_STATUS = (429, 500, 502, 503, 504)
+        delay = 2.0
+        last_exc = None
+        for _attempt in range(5):
+            try:
+                r = self.s.get(url, timeout=40)
+            except requests.RequestException as exc:      # timeout / conn drop
+                last_exc = exc
+                if _attempt < 4:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 30)
+                    continue
+                raise
+            if r.status_code in (401, 403):
+                raise WebAuthError(
+                    f"web session rejected (HTTP {r.status_code}); re-capture "
+                    "config_files/interakt_curl.txt from a fresh 'Copy as cURL'.")
+            if r.status_code in _RETRY_STATUS and _attempt < 4:
+                time.sleep(delay)
+                delay = min(delay * 2, 30)
+                continue
+            r.raise_for_status()
+            return r.json()
+        if last_exc:                                       # exhausted on network errors
+            raise last_exc
+        r.raise_for_status()                               # exhausted on 429/5xx
         return r.json()
 
     @staticmethod
