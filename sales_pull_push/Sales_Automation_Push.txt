@@ -1,4 +1,4 @@
-cd "C:\Users\pc\PycharmProjects\IntelliBI_Sales_Automation"
+cd "C:\Users\vaibh\Documents\IntelliBI Automation\IntelliBI_Sales_Automation"
 $msg = "Sales: <describe your changes here>`n`nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`nClaude-Session: https://claude.ai/code/session_01B7oes8NoE3Q9mKZgP1qgis"
 
 Remove-Item .git\index.lock -Force -ErrorAction SilentlyContinue
