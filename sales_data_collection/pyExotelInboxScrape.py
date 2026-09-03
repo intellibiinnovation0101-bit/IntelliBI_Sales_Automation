@@ -10,7 +10,8 @@ the rendered rows. The captured HTML is written to
 config_files/inbox_html/inbox_scraped.html, which the normal sync then merges.
 
 ONE-TIME SETUP (in the project folder):
-    .venv\\Scripts\\python.exe -m pip install playwright
+    .venv\\Scripts\\python.exe -m pip install pl
+    aywright
     .venv\\Scripts\\python.exe -m playwright install chromium
 
 RUN (backfill everything, then the sync enriches it):
@@ -196,7 +197,24 @@ def main():
                         "Chrome/150.0.0.0 Safari/537.36"))
         ctx.add_cookies(cookies)
         page = ctx.new_page()
-        page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=60000)
+        try:
+            page.goto(INBOX_URL, wait_until="domcontentloaded", timeout=60000)
+        except Exception as _nav_err:
+            _m = str(_nav_err)
+            if "ERR_TOO_MANY_REDIRECTS" in _m or "redirect" in _m.lower():
+                log.error(
+                    "Exotel bounced the request in a login redirect loop "
+                    "(ERR_TOO_MANY_REDIRECTS) — the saved web session has "
+                    "expired. Re-capture it once with:  .venv\\Scripts\\"
+                    "python.exe common\\exotel_session.py --setup   (after "
+                    "that, every run auto-refreshes the cookie).")
+            else:
+                log.error(
+                    "Could not open the Inbox page (%s). If this persists, "
+                    "re-capture the session with:  .venv\\Scripts\\python.exe "
+                    "common\\exotel_session.py --setup", _nav_err)
+            browser.close()
+            return 2
 
         # Confirm we're logged in.
         try:
