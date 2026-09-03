@@ -52,14 +52,14 @@ def now_ist():
 # ============================================================
 # REPORT GENERATION CONFIGURATION
 # ============================================================
-GENERATE_DAILY_REPORT   = True
+GENERATE_DAILY_REPORT   = False
 GENERATE_WEEKLY_REPORT   = False
-GENERATE_MONTHLY_REPORT  = False
+GENERATE_MONTHLY_REPORT  = True
 
 # Optional manual report periods (leave as None to use the defaults below).
-DAILY_REPORT_DATE            = None      ## e.g. "2026-07-30"
+DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
-MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
+MONTHLY_REPORT_MONTH         = 8 #None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
 
 # ── Scheduled-run report selection (scheduler only) ──────────────────────────
