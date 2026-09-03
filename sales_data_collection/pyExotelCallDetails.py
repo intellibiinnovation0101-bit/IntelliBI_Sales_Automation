@@ -572,8 +572,14 @@ def preflight_sheet_access(service):
     """Verify the service account can actually reach the target sheet, so we
     can give a clear 'share the sheet' message instead of a silent no-op."""
     try:
-        meta = service.spreadsheets().get(
-            spreadsheetId=SPREADSHEET_ID).execute()
+        # Transient Google outages (HTTP 429/500/503) are retried with backoff
+        # via the project's shared helper, so a brief "service unavailable"
+        # no longer fails the whole run. 403/404 are NOT retried — they still
+        # fall through to the clear "share the sheet" message below.
+        meta = utils._gsheets_call_with_retry(
+            lambda: service.spreadsheets().get(
+                spreadsheetId=SPREADSHEET_ID).execute(),
+            label="preflight sheet access")
         log.info("Target spreadsheet OK: '%s'",
                  meta.get("properties", {}).get("title", SPREADSHEET_ID))
     except HttpError as exc:
