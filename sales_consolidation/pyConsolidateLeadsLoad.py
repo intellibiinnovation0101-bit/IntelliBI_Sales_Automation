@@ -1794,6 +1794,44 @@ def _autoformat(xlsx_path):
 # 9b. gspread helpers (production mode)
 # ---------------------------------------------------------------------------
 
+def _execute_with_retry(request, max_retries=5, base_delay=2.0, max_delay=30.0):
+    """Execute a Google API request with retry + exponential backoff on TRANSIENT
+    failures — read/connect timeouts, dropped connections, and HTTP 429/500/502/
+    503/504. Google's Sheets API intermittently times out or returns 503 'service
+    currently unavailable'; without a retry a single blip made a read fail (e.g.
+    the Lead-Type mapping read → every lead fell back to 'Unidentified' for that
+    run). Non-transient errors (403/404/…) are raised immediately, unchanged, so
+    a real permission problem still surfaces exactly as before."""
+    import socket
+    import time as _time
+    from googleapiclient.errors import HttpError
+    _RETRY_STATUS = {429, 500, 502, 503, 504}
+    delay = base_delay
+    last_exc = None
+    for _attempt in range(max_retries + 1):
+        try:
+            return request.execute()
+        except HttpError as exc:
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            try:
+                status = int(status)
+            except (TypeError, ValueError):
+                status = None
+            if status in _RETRY_STATUS and _attempt < max_retries:
+                last_exc = exc
+            else:
+                raise
+        except (socket.timeout, TimeoutError, ConnectionError, OSError) as exc:
+            if _attempt < max_retries:
+                last_exc = exc
+            else:
+                raise
+        _time.sleep(delay)
+        delay = min(delay * 2, max_delay)
+    if last_exc:
+        raise last_exc
+
+
 def _sheets_service():
     """Authenticate with the repo service account and return a Sheets v4 client
     (identical auth to pyGoogleSheetSync.py)."""
@@ -1804,17 +1842,17 @@ def _sheets_service():
 
 
 def _first_tab_title(svc, sheet_id):
-    meta = svc.spreadsheets().get(spreadsheetId=sheet_id).execute()
+    meta = _execute_with_retry(svc.spreadsheets().get(spreadsheetId=sheet_id))
     return meta["sheets"][0]["properties"]["title"]
 
 
 def _read_gsheet_df(sheet_id):
     svc = _sheets_service()
     title = _first_tab_title(svc, sheet_id)
-    resp = svc.spreadsheets().values().get(
+    resp = _execute_with_retry(svc.spreadsheets().values().get(
         spreadsheetId=sheet_id, range=title,
         valueRenderOption="FORMATTED_VALUE",
-        dateTimeRenderOption="FORMATTED_STRING").execute()
+        dateTimeRenderOption="FORMATTED_STRING"))
     values = resp.get("values", [])
     if not values:
         return pd.DataFrame()

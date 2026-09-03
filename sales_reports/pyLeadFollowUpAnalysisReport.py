@@ -83,12 +83,13 @@ def now_ist():
 # date. When True, the Daily/Weekly/Monthly/Manual flags below are IGNORED for
 # that run and the script decides automatically:
 #     • Daily            -> every run, for the current day
-#     • Weekly           -> only on Monday, for the previous complete Mon–Sun week
+#     • Weekly           -> once per day, on the FIRST successful run of the day;
+#                           period unchanged (previous complete Mon–Sun week)
 #     • Monthly          -> only on the last calendar day of the month, for that
 #                           whole month (1st → last day)
 # When False, the manual GENERATE_DAILY/WEEKLY/MONTHLY/MANUAL flags are used
 # exactly as before.
-GENERATE_AUTO    = True
+GENERATE_AUTO    = False
 
 GENERATE_DAILY   = True
 GENERATE_WEEKLY  = True
@@ -1874,6 +1875,11 @@ class Tab:
         # explicit per-cell overrides for hand-laid blocks (e.g. the side-by-side
         # Google-Meet | Walk-In panel). (row, col) -> {"bg":rgb, "fg":rgb, "bold":bool}
         self.cell_fmt = {}
+        # Follow-Up Trend additions (purely additive, ignored by everything else):
+        # openpyxl chart specs to float on this tab + helper rows/cols to hide.
+        self.charts = []
+        self.hidden_rows = set()
+        self.hidden_cols = set()
 
     def set_fmt(self, ri, ci, bg=None, fg=None, bold=None):
         cur = self.cell_fmt.setdefault((ri, ci), {})
@@ -2019,6 +2025,178 @@ def _p100(nn, dd):
     return (100.0 * nn / dd) if dd else 0.0
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  Follow-Up Trend  (Hourly for Daily; Day-wise for Weekly / Monthly)
+# ═══════════════════════════════════════════════════════════════════════════
+# Purely additive. Buckets the SAME pending leads that produced the Summary
+# totals into a time trend that RECONCILES with Total Follow-Up Done / Remaining
+# (each lead is placed in exactly one bucket, its Done and Remaining added there).
+# Nothing in the follow-up logic, Summary values, calculations, email or masking
+# is changed. Chart data is ALWAYS kept in VISIBLE cells, because the Google-Sheet
+# conversion prunes chart series that reference hidden cells.
+TREND_HEX = {"done": "2E7D32", "remaining": "ED7D31"}
+
+
+def _trend_word(ptype):
+    return "Hourly" if ptype == "Daily" else "Day-wise"
+
+
+def _trend_bounds(period_range):
+    """(start_date, end_date) parsed from the report's period-range string."""
+    parts = [p.strip() for p in str(period_range).split(" to ")]
+
+    def _p(x):
+        try:
+            return datetime.strptime(x, "%d-%b-%Y").date()
+        except Exception:
+            return None
+    a = _p(parts[0]) if parts else None
+    b = _p(parts[1]) if len(parts) > 1 else a
+    return a, b
+
+
+def _fu_is_done(cs):
+    return str(cs or "").startswith("Follow-Up Done")
+
+
+def followup_trend_series(pending_leads, ptype, start, end, mode):
+    """Return (labels, done, remaining), time-bucketed so the two columns sum to
+    the level's Total Follow-Up Done / Remaining. Every lead is placed in exactly
+    one bucket and its Done + Remaining are added there.
+
+      mode 'overall'    : per lead Done=1 when _completion_status is a
+                          'Follow-Up Done*' state else 0; Remaining=1-Done — so
+                          the columns reconcile with the overall Summary.
+      mode 'counsellor' : Done=followup.done, Remaining=followup.remaining for
+                          OPEN leads — reconciles with the counsellor Summary.
+
+    Buckets use a FIXED axis so the chart always has several points:
+      Daily            -> hours 11 AM..9 PM (plus any hour that has a completion)
+                          and a final 'Overdue / earlier' bucket.
+      Weekly / Monthly -> every calendar day in the report period."""
+    daily = (ptype == "Daily")
+    OVER = "Overdue / earlier"
+    if daily:
+        hours = set(range(11, 22))
+        for l in pending_leads:
+            ts = l.get("_record_ts")
+            if ts and start and ts.date() == start:
+                hours.add(ts.hour)
+        keys = [("H", h) for h in sorted(hours)] + [("Z", OVER)]
+    else:
+        keys = []
+        if start and end:
+            d = start
+            while d <= end:
+                keys.append(("D", d))
+                d = d + timedelta(days=1)
+        if not keys:
+            keys = [("D", start or end)]
+
+    idx = {k: i for i, k in enumerate(keys)}
+    done = [0] * len(keys)
+    rem = [0] * len(keys)
+
+    def _key(l):
+        ts = l.get("_record_ts")
+        if daily:
+            if ts and start and ts.date() == start:
+                return ("H", ts.hour)
+            return ("Z", OVER)
+        if ts and start and end and start <= ts.date() <= end:
+            return ("D", ts.date())
+        nd = (parse_followup_date(l.get("_next_raw"))
+              or parse_followup_date(l.get("_master_next")))
+        if nd and start and end and start <= nd <= end:
+            return ("D", nd)
+        if ts and start and end:
+            return ("D", min(max(ts.date(), start), end))
+        return ("D", start or end)
+
+    for l in pending_leads:
+        fu = l.get("followup", {}) or {}
+        if mode == "overall":
+            d = 1 if _fu_is_done(l.get("_completion_status")) else 0
+            r = 1 - d
+        else:
+            openl = bool(fu.get("open"))
+            d = int(fu.get("done", 0) or 0) if openl else 0
+            r = int(fu.get("remaining", 0) or 0) if openl else 0
+        i = idx.get(_key(l), len(keys) - 1)
+        done[i] += d
+        rem[i] += r
+
+    labels = []
+    for typ, val in keys:
+        if typ == "H":
+            labels.append(datetime(2000, 1, 1, int(val)).strftime("%I %p").lstrip("0"))
+        elif typ == "D":
+            labels.append(val.strftime("%d-%b") if val else "-")
+        else:
+            labels.append(val)
+    return labels, done, rem
+
+
+def _trend_chart_spec(title, cat_col, first, last, done_col, rem_col,
+                      anchor_row, anchor_col, height, width):
+    return {
+        "title": title, "x_title": "", "y_title": "Number of Follow-Ups",
+        "cat_col": cat_col, "first_row": first, "last_row": last,
+        "series": [(done_col, "Follow-Up Done", TREND_HEX["done"]),
+                   (rem_col, "Follow-Ups Remaining", TREND_HEX["remaining"])],
+        "anchor_row": anchor_row, "anchor_col": anchor_col,
+        "height": height, "width": width,
+    }
+
+
+def build_followup_trend_tab(period_label, period_range, pending_leads, ptype, gen):
+    """Dedicated Follow-Up Trend tab: the TABLE first, the GRAPH below it.
+    Columns are Total Follow-Up Done and Total Follow-Ups Remaining, hourly for
+    Daily and day-wise for Weekly/Monthly, reconciling with the Summary totals."""
+    word = _trend_word(ptype)
+    tab_name = "Hourly Follow-Ups" if ptype == "Daily" else "Day-Wise Follow-Ups"
+    axis = "Hour" if ptype == "Daily" else "Date"
+    t = Tab(tab_name)
+    add_header(t, f"Follow-Up Trend - {word}", period_range, gen)
+    start, end = _trend_bounds(period_range)
+    labels, dv, rv = followup_trend_series(pending_leads or [], ptype, start, end, "overall")
+    t.title(f"Follow-Up Trend - {word}")
+    t.header([axis, "Total Follow-Up Done", "Total Follow-Ups Remaining"])
+    first = len(t.rows)
+    for i in range(len(labels)):
+        t.row([labels[i], dv[i], rv[i]])
+    last = len(t.rows) - 1
+    t.row(["Total", sum(dv), sum(rv)], kpi=True)
+    t.blank()
+    if labels:
+        t.charts.append(_trend_chart_spec(
+            f"Follow-Up Trend - {word}", 0, first, last, 1, 2,
+            anchor_row=last + 3, anchor_col=0, height=9, width=24))
+    return t
+
+
+def add_followup_trend_chart_only(t, group_leads, ptype, period_range):
+    """Chart-ONLY trend for a counsellor, floated to the right of the Summary.
+    Helper data is written to VISIBLE far-right cells (col R+, past the pending
+    table, so nothing overlaps and the series survive the Google-Sheet convert),
+    and the chart is kept compact so it sits in the gap right of the Summary."""
+    start, end = _trend_bounds(period_range)
+    labels, dv, rv = followup_trend_series(group_leads or [], ptype, start, end, "counsellor")
+    if not labels:
+        return
+    HC = 17                                              # helper block at column R
+    t.rows.append([""] * HC + [("Hour" if ptype == "Daily" else "Date"),
+                               "Follow-Up Done", "Follow-Ups Remaining"])
+    first = len(t.rows)
+    for i in range(len(labels)):
+        t.rows.append([""] * HC + [labels[i], dv[i], rv[i]])
+    last = len(t.rows) - 1
+    word = _trend_word(ptype)
+    t.charts.append(_trend_chart_spec(
+        f"Follow-Up Trend - {word}", HC, first, last, HC + 1, HC + 2,
+        anchor_row=1, anchor_col=4, height=5, width=12))
+
+
 def build_summary_tab(period_label, period_range, leads, model, bands, gen,
                       period_pending=None, total_pending=None, overdue_count=None,
                       done_count=None, remaining_count=None, mix_leads=None,
@@ -2074,6 +2252,10 @@ def build_summary_tab(period_label, period_range, leads, model, bands, gen,
            "Pending leads with no qualifying follow-up update yet "
            "(Done + Remaining = Total Follow-Up Pending)"], kpi=True)
     t.blank()
+
+    # (The overall Follow-Up Trend now lives in its own tab — 'Hourly Follow-Ups'
+    #  for Daily, 'Day-Wise Follow-Ups' for Weekly/Monthly — added right after the
+    #  Summary in build_report(); it is no longer placed inside this Summary tab.)
 
     # ── 2. Google Meet & Walk-In — scheduled / attendance for THIS period ───────
     # Sourced from the Consolidate master (IsGoogleMeetSchedule / IsWalkInSchedule
@@ -2538,6 +2720,10 @@ def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
                    fu["next_follow"], l.get("_followup_status", ""),
                    l.get("_completion_status", ""),
                    l["meet_state"], l["walk_state"], l["next_action"]])
+        # Chart-only Follow-Up Trend for this counsellor, floated to the right of
+        # the Summary block (same Daily/Weekly/Monthly logic; reconciles with this
+        # counsellor's Pending/Done/Remaining). Helper data is hidden.
+        add_followup_trend_chart_only(t, g, period_label.split()[0], period_range)
         out[t.name] = t
     return out
 
@@ -2774,6 +2960,53 @@ def write_local_xlsx(path, tabs):
         for ci in range(1, maxw + 1):
             longest = max((len(str(row[ci - 1])) for row in tab.rows if ci - 1 < len(row)), default=8)
             ws.column_dimensions[get_column_letter(ci)].width = min(max(longest + 2, 10), 52)
+
+        # ── Follow-Up Trend: hide helper cells + float the line chart(s) ─────────
+        for _ci in sorted(getattr(tab, "hidden_cols", ()) or ()):
+            ws.column_dimensions[get_column_letter(_ci + 1)].hidden = True
+        for _ri in sorted(getattr(tab, "hidden_rows", ()) or ()):
+            ws.row_dimensions[_ri + 1].hidden = True
+        for _spec in getattr(tab, "charts", ()) or ():
+            try:
+                from openpyxl.chart import LineChart, Reference, Series
+                from openpyxl.chart.marker import Marker
+                from openpyxl.chart.shapes import GraphicalProperties
+                from openpyxl.drawing.line import LineProperties
+                ch = LineChart()
+                ch.title = _spec["title"]
+                ch.x_axis.title = _spec.get("x_title", "")
+                ch.y_axis.title = _spec.get("y_title", "Number of Follow-Ups")
+                ch.x_axis.delete = False
+                ch.y_axis.delete = False
+                ch.height = _spec.get("height", 8.5)
+                ch.width = _spec.get("width", 20)
+                ch.style = 12
+                try:
+                    ch.plotVisOnly = False   # plot even when helper cells are hidden
+                except Exception:
+                    pass
+                cats = Reference(ws, min_col=_spec["cat_col"] + 1, max_col=_spec["cat_col"] + 1,
+                                 min_row=_spec["first_row"] + 1, max_row=_spec["last_row"] + 1)
+                for _c0, _title, _hex in _spec["series"]:
+                    ref = Reference(ws, min_col=_c0 + 1, max_col=_c0 + 1,
+                                    min_row=_spec["first_row"] + 1, max_row=_spec["last_row"] + 1)
+                    ser = Series(ref, title=_title)
+                    ser.smooth = False
+                    ser.marker = Marker(symbol="circle", size=6)
+                    if _hex:
+                        gp = GraphicalProperties()
+                        gp.line = LineProperties(solidFill=_hex, w=22000)
+                        ser.graphicalProperties = gp
+                        ser.marker.graphicalProperties = GraphicalProperties(solidFill=_hex)
+                    ch.series.append(ser)
+                ch.set_categories(cats)
+                if ch.legend is not None:
+                    ch.legend.position = "b"
+                    ch.legend.overlay = False
+                anchor = get_column_letter(_spec["anchor_col"] + 1) + str(_spec["anchor_row"] + 1)
+                ws.add_chart(ch, anchor)
+            except Exception as _e:
+                print("  [trend-chart] non-fatal:", _e)
     wb.save(path)
 
 
@@ -2798,6 +3031,11 @@ def build_report(period_label, period_range, leads, model, bands, gen,
                                         total_pending, overdue_count,
                                         done_count, remaining_count, pend,
                                         gm_metrics, wk_metrics)
+    # Dedicated Follow-Up Trend tab immediately after Summary (table then graph):
+    #   Daily -> 'Hourly Follow-Ups';  Weekly/Monthly -> 'Day-Wise Follow-Ups'.
+    _ptype0 = period_label.split()[0]
+    _trend_tab = build_followup_trend_tab(period_label, period_range, pend, _ptype0, gen)
+    tabs[_trend_tab.name] = _trend_tab
     tabs["Priority & Actions"] = build_priority_tab(pend, gen, period_label, period_range)
     # detailed Google Meet & Walk-In tab (unique scheduled leads), right after
     # Priority & Actions and structured similarly.
@@ -3045,6 +3283,58 @@ def build_lfa_email_body(report_type, period_range, url, link_name, gen_stamp,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Weekly once-per-day guard (AUTO mode)
+# ═══════════════════════════════════════════════════════════════════════════
+# In GENERATE_AUTO mode the Weekly report is generated once per day, on the
+# FIRST successful run of the day. A tiny marker file records the date the Weekly
+# report last generated successfully; it is written ONLY after a full Weekly
+# generation + upload + email (see the end of run()), so if an earlier run fails
+# before Weekly completes, the next run retries it. This affects ONLY when Weekly
+# is triggered — its date range, content, formatting, tabs, email and masking are
+# unchanged. It is never consulted in manual mode.
+_WEEKLY_MARKER_NAME = "pyLeadFollowUpAnalysisReport_weekly_lastok.txt"
+
+
+def _weekly_marker_path():
+    base = None
+    try:
+        import paths as _paths
+        base = getattr(_paths, "CACHE_DIR", None)
+    except Exception:
+        base = None
+    base = str(base) if base else str(LOGS_DIR)
+    try:
+        os.makedirs(base, exist_ok=True)
+    except Exception:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, _WEEKLY_MARKER_NAME)
+
+
+def _weekly_done_today(day):
+    """True if the Weekly report already generated successfully today."""
+    path = _weekly_marker_path()
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as fh:
+                return fh.readline().strip() == day.isoformat()
+    except Exception:
+        pass
+    return False
+
+
+def _mark_weekly_done_today(day):
+    """Record that the Weekly report generated successfully today."""
+    try:
+        with open(_weekly_marker_path(), "w", encoding="utf-8") as fh:
+            fh.write(day.isoformat() + "\n")
+            fh.write(f"Weekly report generated successfully at "
+                     f"{datetime.now():%Y-%m-%d %H:%M:%S}\n")
+    except Exception as e:
+        print(f"  [weekly-guard] WARN could not write marker ({e}); "
+              f"Weekly may generate again later today.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════════════════════
 def run():
@@ -3131,8 +3421,12 @@ def run():
         st, en = day_bounds(today)
         jobs.append(("Daily", today.strftime("%d-%b-%Y"), st, en,
                      f"Lead Follow-Up Analysis - Daily - {today.strftime('%d-%b-%Y')}"))
-        # Weekly — only on Monday, for the previous COMPLETE Mon–Sun week.
-        if today.weekday() == 0:
+        # Weekly — once per day, on the FIRST successful run of the day.
+        # (Was: only on Monday.) The Weekly PERIOD/date-range below is unchanged;
+        # only the trigger changed. The per-day marker is written after the
+        # Weekly report succeeds (end of this loop), so a failed earlier run lets
+        # the next run retry, and once it succeeds it is skipped the rest of today.
+        if not _weekly_done_today(today):
             st, en, mon, sun = week_bounds(today - timedelta(days=7))
             jobs.append(("Weekly",
                          f"{mon.strftime('%d-%b-%Y')} to {sun.strftime('%d-%b-%Y')}",
@@ -3381,6 +3675,14 @@ def run():
                            build_lfa_email_body(label, rng, url_masked or "", link_name,
                                                 gen, *_fu, *_gm, *_wk),
                            masked_recips)
+
+        # AUTO mode: the Weekly report generates once per day, on the first
+        # SUCCESSFUL run. Reaching here means this job fully generated + uploaded
+        # + emailed (dry-run / local mode `continue`d earlier), so record success
+        # now — later runs today then skip Weekly. A failed earlier run never
+        # reaches this point, so the next run retries Weekly.
+        if GENERATE_AUTO and label == "Weekly":
+            _mark_weekly_done_today(today)
 
     print("\nDone.")
     return 0
