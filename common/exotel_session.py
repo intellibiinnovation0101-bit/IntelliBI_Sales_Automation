@@ -66,15 +66,32 @@ BROWSER_CHANNEL = os.environ.get("EXOTEL_BROWSER_CHANNEL", "msedge").strip()
 def _open_profile(p, headless):
     """Open the persistent login profile in the configured browser channel,
     falling back to Playwright's bundled Chromium if that channel is not
-    installed on this machine."""
+    installed. Automation markers are hidden (the --enable-automation switch
+    is dropped, the AutomationControlled blink feature is disabled, and
+    navigator.webdriver is masked) so login pages that otherwise refuse input
+    or keep refreshing inside an automated browser behave like a normal one."""
+    launch_kw = dict(
+        headless=headless,
+        args=["--disable-blink-features=AutomationControlled"],
+        ignore_default_args=["--enable-automation"],
+    )
+    ctx = None
     if BROWSER_CHANNEL and BROWSER_CHANNEL.lower() != "chromium":
         try:
-            return p.chromium.launch_persistent_context(
-                PROFILE_DIR, headless=headless, channel=BROWSER_CHANNEL)
+            ctx = p.chromium.launch_persistent_context(
+                PROFILE_DIR, channel=BROWSER_CHANNEL, **launch_kw)
         except Exception as _e:  # channel not found -> bundled Chromium
             log.info("Browser channel %r not available (%s) - using bundled "
                      "Chromium instead.", BROWSER_CHANNEL, _e)
-    return p.chromium.launch_persistent_context(PROFILE_DIR, headless=headless)
+    if ctx is None:
+        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, **launch_kw)
+    try:
+        ctx.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', "
+            "{get: () => undefined});")
+    except Exception:
+        pass
+    return ctx
 
 
 class ExotelLoginError(RuntimeError):
