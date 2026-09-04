@@ -53,6 +53,29 @@ CONFIG_FILE = os.path.join(CREDENTIALS_DIR, "exotel_session_config.json")
 DEFAULT_STALE_HOURS = 12
 DEFAULT_LOGIN_URL = "https://my.exotel.com/"
 
+# Which browser Playwright drives for the saved login profile.
+#   "msedge"  -> the real Microsoft Edge installed on the machine (default on
+#                Windows; behaves like a normal browser, which the Exotel login
+#                accepts more reliably than the bundled automation Chromium).
+#   "chrome"  -> the installed Google Chrome.
+#   ""/"chromium" -> Playwright's bundled Chromium (the old behaviour).
+# Override per-machine with the EXOTEL_BROWSER_CHANNEL environment variable.
+BROWSER_CHANNEL = os.environ.get("EXOTEL_BROWSER_CHANNEL", "msedge").strip()
+
+
+def _open_profile(p, headless):
+    """Open the persistent login profile in the configured browser channel,
+    falling back to Playwright's bundled Chromium if that channel is not
+    installed on this machine."""
+    if BROWSER_CHANNEL and BROWSER_CHANNEL.lower() != "chromium":
+        try:
+            return p.chromium.launch_persistent_context(
+                PROFILE_DIR, headless=headless, channel=BROWSER_CHANNEL)
+        except Exception as _e:  # channel not found -> bundled Chromium
+            log.info("Browser channel %r not available (%s) - using bundled "
+                     "Chromium instead.", BROWSER_CHANNEL, _e)
+    return p.chromium.launch_persistent_context(PROFILE_DIR, headless=headless)
+
 
 class ExotelLoginError(RuntimeError):
     pass
@@ -168,7 +191,7 @@ def setup_login(logger: logging.Logger | None = None) -> bool:
     print("=" * 64 + "\n")
 
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False)
+        ctx = _open_profile(p, headless=False)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
             page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
@@ -219,7 +242,7 @@ def refresh_session(force: bool = False,
     headless = bool(_cfg().get("headless", True))
 
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=headless)
+        ctx = _open_profile(p, headless=headless)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         logged_in = _inbox_logged_in(page, sid)
         cookie = _cookie_header(ctx)
