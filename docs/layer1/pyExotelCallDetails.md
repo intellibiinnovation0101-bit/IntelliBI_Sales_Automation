@@ -64,6 +64,11 @@ rows upserted, and elapsed time.
 
 - Company/virtual Exotel lines are handled downstream (Layer 2) so they never
   become leads.
+- **Google Sheets preflight is retried**: the initial sheet-access check is
+  wrapped in `utils._gsheets_call_with_retry`, so a transient Sheets API error
+  (429 rate-limit, 500/503) no longer fails the run outright — it retries with
+  back-off before giving up. Persistent errors still surface with a clear
+  message.
 - **Config/sheet error**: ensure the `Calls` sheet is shared with the service
   account and the Exotel credentials are valid.
 - Run **after** `pyExotelInboxScrape.py` for the freshest notes; the runner does

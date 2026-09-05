@@ -60,6 +60,13 @@ auto-login events.
 ## Troubleshooting
 
 - **Playwright not installed**: `python -m playwright install chromium`.
+- **Login expired / inbox keeps redirecting**: when the saved session has
+  expired the inbox URL redirects back to the login page in a loop
+  (`ERR_TOO_MANY_REDIRECTS`). The script detects this, logs a clear
+  *"session expired — run `common\exotel_session.py --setup`"* message and exits
+  with code **2** (instead of crashing with a stack trace). Re-establish the
+  session with `python common\exotel_session.py --setup` (opens Microsoft Edge
+  via the saved browser profile; see `common/exotel_session.py`), then re-run.
 - **Login expired**: run once with `HEADFUL=1` to log in, so the profile can
   refresh the session for scheduled runs.
 - A failure here is **non-fatal** for the pipeline: `pyExotelCallDetails.py`

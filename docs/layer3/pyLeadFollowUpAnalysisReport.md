@@ -22,8 +22,15 @@ history. Uploads each report to Drive and e-mails it.
 
 ## Output tabs
 
-`Summary` · `Priority & Actions` · `Google Meet & Walk-In` · `Counsellor
-Performance` · one tab **per counsellor** · `Conversion Model`.
+`Summary` · `Hourly Follow-Ups` (Daily) / `Day-Wise Follow-Ups` (Weekly &
+Monthly) · `Counsellor Follow-Up Trend` · `Priority & Actions` · `Google Meet &
+Walk-In` · `Counsellor Performance` · one tab **per counsellor** · `Conversion
+Model`.
+
+A hidden helper sheet, `Counsellor Trend Data`, holds the data series the
+`Counsellor Follow-Up Trend` charts read from (kept off the visible tab so it
+shows only the snapshot + charts). It carries no report content and can be left
+hidden; the report and its numbers are unaffected by it.
 
 | Target | Detail |
 |--------|--------|
@@ -74,6 +81,23 @@ Environment / `config.yaml`:
   gets a single tab and merged metrics.
 - **Google Meet & Walk-In**: scheduled records up to the report date only;
   attendance from the Meet form / Walk-In tab.
+- **Follow-Up Trend graphs** (`Hourly` / `Day-Wise Follow-Ups` and `Counsellor
+  Follow-Up Trend`): they **track** the already-finalized `Total Follow-Up
+  Pending` cohort — they never redefine or recalculate it. That finalized cohort
+  (current-period pending **+** previous-period overdue, exactly as the Summary
+  computes it) is the constant base line; `Total Follow-Up Done` is the
+  **cumulative** count completed as of each bucket, and `Total Follow-Ups
+  Remaining = base − Done`. So **Pending = Done + Remaining at every bucket** and
+  the totals reconcile with the Summary (and, on the counsellor view, per
+  counsellor).
+- **Cohort window vs. graph window are deliberately separate.** The cohort keeps
+  the report's existing period rules; the graph's X-axis is a **current-period
+  observation window up to the report-generation moment** — Daily: the current
+  day, hour-by-hour from 10 AM to the generation hour; Weekly: the current week
+  (Monday) to the generation date; Monthly: the 1st of the current month to the
+  generation date. Previous-period dates (which only bring overdue leads *into*
+  the base) and still-future dates never appear on the axis. A report generated
+  after its period has closed simply shows the full period.
 
 ## How it runs
 
