@@ -1380,7 +1380,10 @@ def follow_up_metrics(next_raw, versions, converted, lost, today, cutoff,
     total_pending = status is not None
     actioned_away = bool((actioned_ov or actioned_cur)
                          and not (open_lead and (cur_in_ov or cur_in_cur)))
-    next_disp = next_dt.strftime("%d-%b-%Y") if next_dt else next_raw
+    # Display the EFFECTIVE next follow-up date (active record, else master),
+    # robustly parsed and in one consistent format; blank when truly none —
+    # never a raw/unparsed string. (Counting/status logic above is unchanged.)
+    next_disp = eff_date.strftime("%d-%b-%Y") if eff_date else ""
     return {
         "done": done,
         "remaining": remaining,
@@ -1880,6 +1883,10 @@ class Tab:
         self.charts = []
         self.hidden_rows = set()
         self.hidden_cols = set()
+        # explicit column widths (0-indexed col -> Excel width units); when set they
+        # override the automatic content-fit sizing so charts can be laid out at
+        # predictable positions (carried through the Google-Sheet conversion).
+        self.col_widths = {}
 
     def set_fmt(self, ri, ci, bg=None, fg=None, bold=None):
         cur = self.cell_fmt.setdefault((ri, ci), {})
@@ -2034,7 +2041,7 @@ def _p100(nn, dd):
 # Nothing in the follow-up logic, Summary values, calculations, email or masking
 # is changed. Chart data is ALWAYS kept in VISIBLE cells, because the Google-Sheet
 # conversion prunes chart series that reference hidden cells.
-TREND_HEX = {"done": "2E7D32", "remaining": "ED7D31"}
+TREND_HEX = {"pending": "1F4E79", "done": "2E7D32", "remaining": "ED7D31"}
 
 
 def _trend_word(ptype):
@@ -2055,34 +2062,86 @@ def _trend_bounds(period_range):
     return a, b
 
 
+def _trend_observation_window(ptype, gen_dt):
+    """Graph observation window — the CURRENT period up to the generation moment,
+    kept deliberately SEPARATE from the report's cohort period (period_range).
+
+    The finalized Total Follow-Up Pending cohort and every Summary number stay
+    exactly as the report already computed them; this ONLY decides which
+    hours/days appear on the trend X-axis, so the graph answers "how much of that
+    finalized cohort is Done / Remaining during the current day/week/month so
+    far":
+        Daily   -> the generation day             (hours capped at the gen hour)
+        Weekly  -> Monday of the gen week .. gen date
+        Monthly -> 1st of the gen month  .. gen date
+    Previous-period dates (which only bring overdue leads INTO the cohort) never
+    appear on the axis, and future dates are never shown. Returns (None, None)
+    when the generation stamp can't be parsed, so callers fall back to the
+    report period."""
+    if gen_dt is None:
+        return None, None
+    d = gen_dt.date()
+    if ptype == "Weekly":
+        return d - timedelta(days=d.weekday()), d
+    if ptype == "Monthly":
+        return d.replace(day=1), d
+    return d, d          # Daily / single-day fallback: the generation day itself
+
+
 def _fu_is_done(cs):
     return str(cs or "").startswith("Follow-Up Done")
 
 
-def followup_trend_series(pending_leads, ptype, start, end, mode):
-    """Return (labels, done, remaining), time-bucketed so the two columns sum to
-    the level's Total Follow-Up Done / Remaining. Every lead is placed in exactly
-    one bucket and its Done + Remaining are added there.
+def followup_trend_series(pending_leads, ptype, start, end, mode, rich_labels=False,
+                          cutoff=None):
+    """Return (labels, pending, done, remaining) for the Follow-Up Trend.
 
-      mode 'overall'    : per lead Done=1 when _completion_status is a
-                          'Follow-Up Done*' state else 0; Remaining=1-Done — so
-                          the columns reconcile with the overall Summary.
+    The trend answers: out of the FINALIZED Total Follow-Up Pending cohort, how
+    many follow-ups are completed (Done) and how many still remain (Remaining)
+    at each point in time, so:
+
+        Total Follow-Up Pending    = a CONSTANT base line = Done_final + Remaining_final
+        Total Follow-Up Done       = CUMULATIVE completions up to that bucket
+        Total Follow-Ups Remaining = base - Done   (=> Pending = Done + Remaining
+                                                       at EVERY bucket)
+
+    Only leads in the passed cohort are tracked; interactions outside the cohort
+    are never counted.
+      mode 'overall'    : per lead 1 Done when _completion_status is a
+                          'Follow-Up Done*' state else 0 Done / 1 Remaining, so
+                          totals reconcile with the overall Summary
+                          (Done_total == Summary Total Follow-Up Done, and
+                          base == Total Follow-Up Pending).
       mode 'counsellor' : Done=followup.done, Remaining=followup.remaining for
-                          OPEN leads — reconciles with the counsellor Summary.
+                          OPEN leads, reconciling with that counsellor Summary.
 
-    Buckets use a FIXED axis so the chart always has several points:
-      Daily            -> hours 11 AM..9 PM (plus any hour that has a completion)
-                          and a final 'Overdue / earlier' bucket.
-      Weekly / Monthly -> every calendar day in the report period."""
+    Buckets (chronological): Daily -> the day's hours (11 AM..9 PM plus any hour
+    that carries a completion); Weekly/Monthly -> every calendar day in range. A
+    completion is placed at its RecordTimeStamp bucket; a completion earlier than
+    the window (or with no timestamp) counts from the first bucket."""
     daily = (ptype == "Daily")
-    OVER = "Overdue / earlier"
+    pl = pending_leads or []
+
+    def _units(l):
+        fu = l.get("followup", {}) or {}
+        if mode == "overall":
+            dd = 1 if _fu_is_done(l.get("_completion_status")) else 0
+            return dd, 1 - dd
+        openl = bool(fu.get("open"))
+        dd = int(fu.get("done", 0) or 0) if openl else 0
+        rr = int(fu.get("remaining", 0) or 0) if openl else 0
+        return dd, rr
+
+    # ---- chronological buckets ----------------------------------------------
     if daily:
-        hours = set(range(11, 22))
-        for l in pending_leads:
-            ts = l.get("_record_ts")
-            if ts and start and ts.date() == start:
-                hours.add(ts.hour)
-        keys = [("H", h) for h in sorted(hours)] + [("Z", OVER)]
+        hours = set(range(10, 22))
+        for l in pl:
+            d0, _ = _units(l)
+            if d0:
+                ts = l.get("_record_ts")
+                if ts and start and ts.date() == start:
+                    hours.add(ts.hour)
+        keys = [("H", h) for h in sorted(hours)]
     else:
         keys = []
         if start and end:
@@ -2093,56 +2152,87 @@ def followup_trend_series(pending_leads, ptype, start, end, mode):
         if not keys:
             keys = [("D", start or end)]
 
-    idx = {k: i for i, k in enumerate(keys)}
-    done = [0] * len(keys)
-    rem = [0] * len(keys)
+    # ---- till-date cutoff: never plot buckets past the report-generation moment
+    # Daily  -> keep hours up to the generation hour (same report day);
+    # Weekly/Monthly -> keep dates up to the generation date. A generation moment
+    # at/after the window end leaves the full range intact.
+    if cutoff is not None:
+        if daily:
+            if start and hasattr(cutoff, "date") and cutoff.date() == start:
+                _ch = cutoff.hour
+                keys = [k for k in keys if k[1] <= _ch] or [("H", _ch)]
+        else:
+            _cd = cutoff.date() if hasattr(cutoff, "date") else cutoff
+            keys = [k for k in keys if not (k[1] and k[1] > _cd)] or [("D", start or end)]
 
-    def _key(l):
+    nkeys = len(keys)
+    kidx = {k: i for i, k in enumerate(keys)}
+
+    def _done_bucket(l):
         ts = l.get("_record_ts")
         if daily:
             if ts and start and ts.date() == start:
-                return ("H", ts.hour)
-            return ("Z", OVER)
-        if ts and start and end and start <= ts.date() <= end:
-            return ("D", ts.date())
+                return kidx.get(("H", ts.hour), 0)
+            return 0                              # earlier / unknown -> done at day start
+        if ts and start and end:
+            dt = ts.date()
+            if dt < start:
+                return 0
+            if dt > end:
+                return nkeys - 1
+            j = kidx.get(("D", dt))
+            if j is not None:
+                return j
         nd = (parse_followup_date(l.get("_next_raw"))
               or parse_followup_date(l.get("_master_next")))
         if nd and start and end and start <= nd <= end:
-            return ("D", nd)
-        if ts and start and end:
-            return ("D", min(max(ts.date(), start), end))
-        return ("D", start or end)
+            j = kidx.get(("D", nd))
+            if j is not None:
+                return j
+        return 0
 
-    for l in pending_leads:
-        fu = l.get("followup", {}) or {}
-        if mode == "overall":
-            d = 1 if _fu_is_done(l.get("_completion_status")) else 0
-            r = 1 - d
-        else:
-            openl = bool(fu.get("open"))
-            d = int(fu.get("done", 0) or 0) if openl else 0
-            r = int(fu.get("remaining", 0) or 0) if openl else 0
-        i = idx.get(_key(l), len(keys) - 1)
-        done[i] += d
-        rem[i] += r
+    # ---- accumulate completions, then make Done cumulative ------------------
+    done_at = [0] * nkeys
+    total_done = total_rem = 0
+    for l in pl:
+        dd, rr = _units(l)
+        total_done += dd
+        total_rem += rr
+        if dd:
+            done_at[_done_bucket(l)] += dd
+
+    base = total_done + total_rem
+    done_cum, run = [], 0
+    for i in range(nkeys):
+        run += done_at[i]
+        done_cum.append(run)
+    pending = [base] * nkeys
+    remaining = [base - x for x in done_cum]
 
     labels = []
     for typ, val in keys:
         if typ == "H":
-            labels.append(datetime(2000, 1, 1, int(val)).strftime("%I %p").lstrip("0"))
+            _hl = datetime(2000, 1, 1, int(val)).strftime("%I %p")
+            labels.append(_hl if rich_labels else _hl.lstrip("0"))
         elif typ == "D":
-            labels.append(val.strftime("%d-%b") if val else "-")
+            if not val:
+                labels.append("-")
+            elif rich_labels:
+                labels.append(val.strftime("%d-%b-%y") + "|" + val.strftime("%a")[0].upper())
+            else:
+                labels.append(val.strftime("%d-%b"))
         else:
             labels.append(val)
-    return labels, done, rem
+    return labels, pending, done_cum, remaining
 
 
-def _trend_chart_spec(title, cat_col, first, last, done_col, rem_col,
+def _trend_chart_spec(title, cat_col, first, last, pending_col, done_col, rem_col,
                       anchor_row, anchor_col, height, width):
     return {
         "title": title, "x_title": "", "y_title": "Number of Follow-Ups",
         "cat_col": cat_col, "first_row": first, "last_row": last,
-        "series": [(done_col, "Follow-Up Done", TREND_HEX["done"]),
+        "series": [(pending_col, "Total Follow-Up Pending", TREND_HEX["pending"]),
+                   (done_col, "Follow-Up Done", TREND_HEX["done"]),
                    (rem_col, "Follow-Ups Remaining", TREND_HEX["remaining"])],
         "anchor_row": anchor_row, "anchor_col": anchor_col,
         "height": height, "width": width,
@@ -2151,50 +2241,72 @@ def _trend_chart_spec(title, cat_col, first, last, done_col, rem_col,
 
 def build_followup_trend_tab(period_label, period_range, pending_leads, ptype, gen):
     """Dedicated Follow-Up Trend tab: the TABLE first, the GRAPH below it.
-    Columns are Total Follow-Up Done and Total Follow-Ups Remaining, hourly for
-    Daily and day-wise for Weekly/Monthly, reconciling with the Summary totals."""
+    Columns are Total Follow-Up Pending (constant base), Total Follow-Up Done and
+    Total Follow-Ups Remaining, hourly for Daily and day-wise for Weekly/Monthly,
+    reconciling with the Summary totals (Pending = Done + Remaining)."""
     word = _trend_word(ptype)
     tab_name = "Hourly Follow-Ups" if ptype == "Daily" else "Day-Wise Follow-Ups"
     axis = "Hour" if ptype == "Daily" else "Date"
     t = Tab(tab_name)
     add_header(t, f"Follow-Up Trend - {word}", period_range, gen)
-    start, end = _trend_bounds(period_range)
-    labels, dv, rv = followup_trend_series(pending_leads or [], ptype, start, end, "overall")
+    # Graph timeline = current period up to generation (separate from the cohort
+    # period); the cohort itself is unchanged.
+    _gen_dt = _parse_gen_dt(gen)
+    start, end = _trend_observation_window(ptype, _gen_dt)
+    if start is None:
+        start, end = _trend_bounds(period_range)
+    labels, pv, dv, rv = followup_trend_series(pending_leads or [], ptype, start, end,
+                                               "overall", cutoff=_gen_dt)
     t.title(f"Follow-Up Trend - {word}")
-    t.header([axis, "Total Follow-Up Done", "Total Follow-Ups Remaining"])
+    t.header([axis, "Total Follow-Up Pending", "Total Follow-Up Done",
+              "Total Follow-Ups Remaining"])
     first = len(t.rows)
     for i in range(len(labels)):
-        t.row([labels[i], dv[i], rv[i]])
+        t.row([labels[i], pv[i], dv[i], rv[i]])
     last = len(t.rows) - 1
-    t.row(["Total", sum(dv), sum(rv)], kpi=True)
+    base = pv[0] if pv else 0
+    t.row(["Total", base, dv[-1] if dv else 0, rv[-1] if rv else 0], kpi=True)
     t.blank()
     if labels:
         t.charts.append(_trend_chart_spec(
-            f"Follow-Up Trend - {word}", 0, first, last, 1, 2,
-            anchor_row=last + 3, anchor_col=0, height=9, width=24))
+            f"Follow-Up Trend - {word}", 0, first, last, 1, 2, 3,
+            anchor_row=last + 3, anchor_col=0, height=9, width=26))
     return t
 
 
-def add_followup_trend_chart_only(t, group_leads, ptype, period_range):
+def add_followup_trend_chart_only(t, group_leads, ptype, period_range, gen=None):
     """Chart-ONLY trend for a counsellor, floated to the right of the Summary.
-    Helper data is written to VISIBLE far-right cells (col R+, past the pending
-    table, so nothing overlaps and the series survive the Google-Sheet convert),
-    and the chart is kept compact so it sits in the gap right of the Summary."""
-    start, end = _trend_bounds(period_range)
-    labels, dv, rv = followup_trend_series(group_leads or [], ptype, start, end, "counsellor")
+    Plots all three metrics (Total Follow-Up Pending base line, Follow-Up Done,
+    Follow-Ups Remaining). Helper data is written to VISIBLE far-right cells
+    (col R+, past the pending table) so nothing overlaps and the series survive
+    the Google-Sheet conversion. The chart is enlarged so the hourly / day-wise
+    labels and the three series read clearly, and stays above the pending table
+    (anchored top-right, beside the Summary block)."""
+    # Graph timeline = current period up to generation (separate from the cohort
+    # period); the cohort is unchanged.
+    _gen_dt = _parse_gen_dt(gen) if gen is not None else None
+    start, end = _trend_observation_window(ptype, _gen_dt)
+    if start is None:
+        start, end = _trend_bounds(period_range)
+    # Count-based (same basis as the overall Executive Snapshot and this
+    # counsellor Summary) so the trend reconciles: base = Total Follow-Up
+    # Pending, Done cumulative up to Total Follow-Up Done, Remaining = base - Done.
+    labels, pv, dv, rv = followup_trend_series(group_leads or [], ptype, start, end,
+                                               "overall", cutoff=_gen_dt)
     if not labels:
         return
     HC = 17                                              # helper block at column R
     t.rows.append([""] * HC + [("Hour" if ptype == "Daily" else "Date"),
-                               "Follow-Up Done", "Follow-Ups Remaining"])
+                               "Total Follow-Up Pending", "Follow-Up Done",
+                               "Follow-Ups Remaining"])
     first = len(t.rows)
     for i in range(len(labels)):
-        t.rows.append([""] * HC + [labels[i], dv[i], rv[i]])
+        t.rows.append([""] * HC + [labels[i], pv[i], dv[i], rv[i]])
     last = len(t.rows) - 1
     word = _trend_word(ptype)
     t.charts.append(_trend_chart_spec(
-        f"Follow-Up Trend - {word}", HC, first, last, HC + 1, HC + 2,
-        anchor_row=1, anchor_col=4, height=5, width=12))
+        f"Follow-Up Trend - {word}", HC, first, last, HC + 1, HC + 2, HC + 3,
+        anchor_row=1, anchor_col=4, height=4.5, width=26))
 
 
 def build_summary_tab(period_label, period_range, leads, model, bands, gen,
@@ -2677,12 +2789,27 @@ def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
                    key=lambda x: x.get("_rank", 10**9 - int(x["conversion_chance"] * 10)))
         n = len(g)
         incl = [l for l in g if l["followup"]["open"]]
-        # Total Follow-Up Pending for this counsellor = the same set counted in
-        # Counsellor Performance; every one of these leads is listed below.
+        # ── Individual counsellor Executive Snapshot ────────────────────────
+        # SAME finalized calculation logic as the overall Summary tab
+        # (Executive Snapshot), filtered to THIS counsellor's records only.
+        # Count-based on the counsellor's finalized pending cohort, so it
+        # always reconciles: Total Follow-Up Pending = Done + Remaining, with
+        # Done <= Pending and Remaining <= Pending. Follow-ups the counsellor
+        # took outside this cohort are not in g, so they never affect these.
         fu_pending = sum(1 for l in g if l["followup"].get("total_pending"))
-        fu_done = sum(l["followup"]["done"] for l in incl)
-        fu_remaining = sum(l["followup"]["remaining"] for l in incl)
-        overdue = sum(1 for l in incl if l["followup"]["overdue"])
+        overdue = sum(1 for l in g if l["followup"].get("overdue"))
+        weekly_pending = sum(1 for l in g if l["followup"].get("period_pending"))
+        fu_done = sum(1 for l in g
+                      if l.get("_completion_status", "Follow-Up Pending")
+                      != "Follow-Up Pending")
+        fu_remaining = max(fu_pending - fu_done, 0)
+        _cptype = period_label.split()[0]   # Daily / Weekly / Monthly / Manual
+        _overdue_label = {"Daily": "Overdue Follow-Ups Last 3 Days",
+                          "Weekly": "Overdue Follow-Ups Last Week",
+                          "Monthly": "Overdue Follow-Ups Last Month",
+                          "Manual": "Overdue Follow-Ups (Selected Range)"
+                          }.get(_cptype, "Overdue Follow-Ups (Next Date Passed)")
+        _weekly_label = f"Total {_cptype} Follow-Up Pending"
         gm_s = sum(1 for l in g if l["meet_state"] != "none")
         gm_a = sum(1 for l in g if l["meet_state"] == "attended")
         wk_s = sum(1 for l in g if l["walk_state"] != "none")
@@ -2693,16 +2820,16 @@ def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
         t = Tab(_safe_tab_name(cb, used))
         add_header(t, f"Counsellor — {cb}", period_range, gen)
         t.title(f"Summary — {cb}")
-        t.header(["Metric", "Value", "%"])
-        t.row(["Total Leads", n, ""], kpi=True)
-        t.row(["Total Follow-Up Pending", fu_pending, pct(fu_pending, n)], kpi=True)
-        t.row(["Overdue Follow-Ups (Next Date Passed)", overdue, pct(overdue, len(incl))])
-        t.row(["Total Follow-Up Done", fu_done, ""])
-        t.row(["Total Follow-Ups Remaining", fu_remaining, ""])
-        t.row(["Google Meets Scheduled / Attended", f"{gm_s}/{gm_a}", pct(gm_a, gm_s)])
-        t.row(["Walk-Ins Scheduled / Attended", f"{wk_s}/{wk_a}", pct(wk_a, wk_s)])
-        t.row(["Converted (Admission Confirmed)", conv, pct(conv, n)])
-        t.row(["Average Conversion Chance", f"{avg_cc:.1f}%", ""], kpi=True)
+        # Individual counsellor Summary: only the five follow-up metrics, in a
+        # Metric + Value table that visually matches the overall Executive
+        # Snapshot (same kpi styling; no % column, no traffic-light fill, no
+        # extra rows). Counsellor-specific values; calculation is unchanged.
+        t.header(["Metric", "Value"])
+        t.row(["Total Follow-Up Pending", fu_pending], kpi=True)
+        t.row([_overdue_label, overdue], kpi=True)
+        t.row([_weekly_label, weekly_pending], kpi=True)
+        t.row(["Total Follow-Up Done", fu_done], kpi=True)
+        t.row(["Total Follow-Ups Remaining", fu_remaining], kpi=True)
         t.blank()
 
         t.title(f"Total Follow-Up Pending Leads — {cb}  ({fu_pending})")
@@ -2723,9 +2850,158 @@ def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
         # Chart-only Follow-Up Trend for this counsellor, floated to the right of
         # the Summary block (same Daily/Weekly/Monthly logic; reconciles with this
         # counsellor's Pending/Done/Remaining). Helper data is hidden.
-        add_followup_trend_chart_only(t, g, period_label.split()[0], period_range)
+        add_followup_trend_chart_only(t, g, period_label.split()[0], period_range, gen)
         out[t.name] = t
     return out
+
+
+# Distinct line colours for the counsellor-comparison overview (cycled).
+COUNS_TREND_PALETTE = ["2E7D32", "1F6FB2", "8E44AD", "E0761F", "0F8B8D",
+                       "C0392B", "6D4C41", "00838F", "AD1457", "455A64"]
+
+
+def _ctrend_status(p):
+    return "On track" if p >= 75 else ("Watch" if p >= 45 else "Behind")
+
+
+def _parse_gen_dt(gen):
+    """Parse the report-generation stamp (e.g. '04-Sep-2026 11:47 PM IST') into a
+    naive datetime used as the trend's till-date cut-off. Returns None if it can't
+    be parsed (the trend then falls back to the full period range)."""
+    t = str(gen or "").replace("IST", "").strip()
+    for f in ("%d-%b-%Y %I:%M %p", "%d-%b-%Y %H:%M:%S",
+              "%d-%b-%Y %H:%M", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(t, f)
+        except Exception:
+            pass
+    return None
+
+
+def build_counsellor_trend_tab(leads, gen, period_label, period_range):
+    """3rd tab — one management view of every counsellor's follow-up progress
+    over time. Count-based on each counsellor's finalized Total Follow-Up
+    Pending cohort (same basis as their Summary), so Pending = Done + Remaining
+    for every counsellor at every bucket. Daily -> hourly; Weekly/Monthly ->
+    day-wise (date | weekday). Additive: does not touch any existing tab."""
+    ptype = period_label.split()[0]
+    word = _trend_word(ptype)
+    axis = "Hour" if ptype == "Daily" else "Date"
+    gen_cut = _parse_gen_dt(gen)        # report-generation moment
+    # Graph timeline = current period up to generation (separate from the cohort
+    # period); the finalized per-counsellor cohort is unchanged.
+    start, end = _trend_observation_window(ptype, gen_cut)
+    if start is None:
+        start, end = _trend_bounds(period_range)
+
+    groups = defaultdict(list)
+    for l in leads:
+        key = re.sub(r"\s+", " ", l["counsellor"]).strip() or "(Unassigned)"
+        groups[key].append(l)
+    ordered = sorted(groups, key=lambda k: (-len(groups[k]), k))[:MAX_COUNSELLOR_TABS]
+
+    per, labels_ref = [], None
+    for cb in ordered:
+        labs, pend, done, rem = followup_trend_series(
+            groups[cb], ptype, start, end, "overall", rich_labels=True, cutoff=gen_cut)
+        if not labs:
+            continue
+        if labels_ref is None:
+            labels_ref = labs
+        base = pend[0] if pend else 0
+        per.append({"name": cb, "pending": pend, "done": done, "remaining": rem,
+                    "base": base, "done_total": done[-1] if done else 0,
+                    "rem_total": rem[-1] if rem else 0})
+
+    t = Tab("Counsellor Follow-Up Trend")
+    add_header(t, "Counsellor Follow-Up Trend", period_range, gen)
+    # Fixed, modest column widths so the floated charts sit at predictable spots
+    # (carried through the Google-Sheet conversion). Col A holds names / axis
+    # labels; B.. are the compact chart band. Long titles/banner overflow into the
+    # empty cells to their right, so nothing is truncated visually.
+    t.col_widths = {0: 20}
+    for _cw in range(1, 19):
+        t.col_widths[_cw] = 9
+    if not per or not labels_ref:
+        t.title("Counsellor Follow-Up Trend")
+        t.row(["No pending follow-ups in this reporting period."])
+        return t, None
+
+    # Every numeric series the charts read lives on a SEPARATE HIDDEN sheet, so
+    # the visible tab shows only the ranked Snapshot and the charts — no raw data
+    # tables. The charts reference this sheet by name (spec["data_sheet"]).
+    d = Tab("Counsellor Trend Data")
+    d.hidden_sheet = True
+    d.no_autocolor = True
+
+    # ── A · Snapshot (ranked by remaining workload) ──────────────────────────
+    t.title(f"Counsellor Snapshot — {word} follow-up progress")
+    t.header(["Counsellor", "Pending", "Done", "Remaining", "Done %", "Status"])
+    for c in sorted(per, key=lambda x: -x["rem_total"]):
+        p = (100.0 * c["done_total"] / c["base"]) if c["base"] else 0.0
+        t.row([c["name"], c["base"], c["done_total"], c["rem_total"],
+               f"{p:.1f}%", _ctrend_status(p)], kpi=True)
+    t.blank()
+
+    # ── B · Overview — completion % over time, one line per counsellor ───────
+    # The % source rows live on the hidden data sheet; only the chart shows here.
+    t.title(f"Follow-Up Completion % Over Time — {word}  (Done / Pending)")
+    d.rows.append([axis] + [c["name"] for c in per])
+    ov_first = len(d.rows)
+    for i, lab in enumerate(labels_ref):
+        row = [lab]
+        for c in per:
+            row.append(round(100.0 * c["done"][i] / c["base"], 1) if c["base"] else 0)
+        d.rows.append(row)
+    ov_last = len(d.rows) - 1
+    ov_anchor = len(t.rows)
+    t.charts.append({
+        "title": f"Follow-Up Completion % by Counsellor — {word}",
+        "x_title": "", "y_title": "Completion %",
+        "data_sheet": d.name,
+        "cat_col": 0, "first_row": ov_first, "last_row": ov_last,
+        "series": [(1 + j, per[j]["name"],
+                    COUNS_TREND_PALETTE[j % len(COUNS_TREND_PALETTE)])
+                   for j in range(len(per))],
+        "anchor_row": ov_anchor, "anchor_col": 0, "height": 9.5, "width": 30,
+        "x_rotate": -45,                                 # slanted date/hour labels
+    })
+    for _ in range(19):                                  # reserve space for the chart
+        t.blank()
+
+    # ── C · Per-counsellor small multiples (Pending / Done / Remaining) ──────
+    # Each counsellor's source block lives on the hidden data sheet; only the
+    # charts show here, laid out two per row.
+    t.title("Per-Counsellor Detail — Pending vs Done vs Remaining")
+    grid_top = len(t.rows)
+    ROW_STEP = 14                          # rows per chart band (matches 7 cm height)
+    grid_rows = ((len(per) + 1) // 2) * ROW_STEP + 2
+    for _ in range(grid_rows):
+        t.blank()
+
+    for j, c in enumerate(per):
+        d.rows.append([axis, "Total Follow-Up Pending",
+                       "Follow-Up Done", "Follow-Ups Remaining"])
+        first = len(d.rows)
+        for i, lab in enumerate(labels_ref):
+            d.rows.append([lab, c["base"], c["done"][i], c["remaining"][i]])
+        last = len(d.rows) - 1
+        # Two per row with ~one column of air between them: left chart anchored at
+        # col A, right chart at col H, each 13.5 cm on the fixed 9-unit band.
+        col = 0 if j % 2 == 0 else 7
+        row = grid_top + (j // 2) * ROW_STEP
+        t.charts.append({
+            "title": c["name"], "x_title": "", "y_title": "Follow-Ups",
+            "data_sheet": d.name,
+            "cat_col": 0, "first_row": first, "last_row": last,
+            "series": [(1, "Total Follow-Up Pending", TREND_HEX["pending"]),
+                       (2, "Follow-Up Done", TREND_HEX["done"]),
+                       (3, "Follow-Ups Remaining", TREND_HEX["remaining"])],
+            "anchor_row": row, "anchor_col": col, "height": 7, "width": 13.5,
+            "x_rotate": -45,               # slanted date/hour labels for legibility
+        })
+    return t, d
+
 
 
 def build_model_tab(model, bands, gen):
@@ -2902,8 +3178,14 @@ def write_local_xlsx(path, tabs):
     thin = Side(style="thin", color="D9DEE8")
     grid = Border(left=thin, right=thin, top=thin, bottom=thin)
     wb = openpyxl.Workbook(); wb.remove(wb.active)
+    ws_by_name = {}                     # tab name -> worksheet (for cross-sheet charts)
+    made = []                           # (tab, ws) for the post-pass that floats charts
     for name, tab in tabs.items():
         ws = wb.create_sheet(re.sub(r"[:\\/?*\[\]]", " ", name)[:31])
+        ws_by_name[name] = ws
+        made.append((tab, ws))
+        if getattr(tab, "hidden_sheet", False):
+            ws.sheet_state = "hidden"   # data-only sheet that feeds charts
         maxw = max(tab.width(), 1)
         for row in tab.rows:
             ws.append(row if row else [""])
@@ -2960,18 +3242,28 @@ def write_local_xlsx(path, tabs):
         for ci in range(1, maxw + 1):
             longest = max((len(str(row[ci - 1])) for row in tab.rows if ci - 1 < len(row)), default=8)
             ws.column_dimensions[get_column_letter(ci)].width = min(max(longest + 2, 10), 52)
+        # explicit width overrides (e.g. the Counsellor Follow-Up Trend layout) win
+        # over the content-fit sizing so the floated charts sit at known positions.
+        for _cw, _wv in (getattr(tab, "col_widths", {}) or {}).items():
+            ws.column_dimensions[get_column_letter(_cw + 1)].width = _wv
 
         # ── Follow-Up Trend: hide helper cells + float the line chart(s) ─────────
         for _ci in sorted(getattr(tab, "hidden_cols", ()) or ()):
             ws.column_dimensions[get_column_letter(_ci + 1)].hidden = True
         for _ri in sorted(getattr(tab, "hidden_rows", ()) or ()):
             ws.row_dimensions[_ri + 1].hidden = True
+
+    # ── second pass: float the line chart(s) ────────────────────────────────
+    # Done after every sheet exists so a chart can read its series from ANOTHER
+    # sheet (spec["data_sheet"], e.g. the hidden 'Counsellor Trend Data' sheet).
+    for tab, ws in made:
         for _spec in getattr(tab, "charts", ()) or ():
             try:
                 from openpyxl.chart import LineChart, Reference, Series
                 from openpyxl.chart.marker import Marker
                 from openpyxl.chart.shapes import GraphicalProperties
                 from openpyxl.drawing.line import LineProperties
+                dws = ws_by_name.get(_spec.get("data_sheet"), ws)   # series source sheet
                 ch = LineChart()
                 ch.title = _spec["title"]
                 ch.x_axis.title = _spec.get("x_title", "")
@@ -2985,10 +3277,10 @@ def write_local_xlsx(path, tabs):
                     ch.plotVisOnly = False   # plot even when helper cells are hidden
                 except Exception:
                     pass
-                cats = Reference(ws, min_col=_spec["cat_col"] + 1, max_col=_spec["cat_col"] + 1,
+                cats = Reference(dws, min_col=_spec["cat_col"] + 1, max_col=_spec["cat_col"] + 1,
                                  min_row=_spec["first_row"] + 1, max_row=_spec["last_row"] + 1)
                 for _c0, _title, _hex in _spec["series"]:
-                    ref = Reference(ws, min_col=_c0 + 1, max_col=_c0 + 1,
+                    ref = Reference(dws, min_col=_c0 + 1, max_col=_c0 + 1,
                                     min_row=_spec["first_row"] + 1, max_row=_spec["last_row"] + 1)
                     ser = Series(ref, title=_title)
                     ser.smooth = False
@@ -3000,6 +3292,20 @@ def write_local_xlsx(path, tabs):
                         ser.marker.graphicalProperties = GraphicalProperties(solidFill=_hex)
                     ch.series.append(ser)
                 ch.set_categories(cats)
+                if _spec.get("x_rotate"):
+                    try:
+                        from openpyxl.chart.text import RichText
+                        from openpyxl.drawing.text import (
+                            RichTextProperties, Paragraph, ParagraphProperties,
+                            CharacterProperties)
+                        ch.x_axis.txPr = RichText(
+                            bodyPr=RichTextProperties(
+                                rot=int(_spec["x_rotate"] * 60000), vert="horz"),
+                            p=[Paragraph(
+                                pPr=ParagraphProperties(defRPr=CharacterProperties()),
+                                endParaRPr=CharacterProperties())])
+                    except Exception:
+                        pass
                 if ch.legend is not None:
                     ch.legend.position = "b"
                     ch.legend.overlay = False
@@ -3036,6 +3342,11 @@ def build_report(period_label, period_range, leads, model, bands, gen,
     _ptype0 = period_label.split()[0]
     _trend_tab = build_followup_trend_tab(period_label, period_range, pend, _ptype0, gen)
     tabs[_trend_tab.name] = _trend_tab
+    _ct_tab, _ct_data = build_counsellor_trend_tab(
+        pend, gen, period_label, period_range)
+    tabs["Counsellor Follow-Up Trend"] = _ct_tab
+    if _ct_data is not None:                 # hidden sheet that feeds the charts
+        tabs[_ct_data.name] = _ct_data
     tabs["Priority & Actions"] = build_priority_tab(pend, gen, period_label, period_range)
     # detailed Google Meet & Walk-In tab (unique scheduled leads), right after
     # Priority & Actions and structured similarly.
