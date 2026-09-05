@@ -9,7 +9,8 @@ pyConsolidatedLeadPerformanceReport.py. Where the first report describes lead
 *activity*, this one is *decision-oriented*: it tells the counselling team what
 to act on next, how each counsellor is performing, and — most importantly — a
 **data-driven Conversion Chance %** for every active lead, learned from
-IntelliBI's own historical conversions.
+IntelliBI's
+ own historical conversions.
 
 WHAT IT PRODUCES  (Daily / Weekly / Monthly / Full)
     Summary            - follow-up, Google-Meet and Walk-In KPIs (counts + %)
@@ -2847,10 +2848,9 @@ def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
                    fu["next_follow"], l.get("_followup_status", ""),
                    l.get("_completion_status", ""),
                    l["meet_state"], l["walk_state"], l["next_action"]])
-        # Chart-only Follow-Up Trend for this counsellor, floated to the right of
-        # the Summary block (same Daily/Weekly/Monthly logic; reconciles with this
-        # counsellor's Pending/Done/Remaining). Helper data is hidden.
-        add_followup_trend_chart_only(t, g, period_label.split()[0], period_range, gen)
+        # (Per-counsellor Follow-Up Trend chart + its helper table intentionally
+        # NOT added here — the consolidated 'Counsellor Follow-Up Trend' tab now
+        # carries every counsellor's trend. Individual tabs stay chart-free.)
         out[t.name] = t
     return out
 
