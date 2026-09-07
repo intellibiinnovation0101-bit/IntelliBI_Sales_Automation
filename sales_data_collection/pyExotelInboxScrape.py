@@ -174,9 +174,12 @@ def main():
         log.info("Auto-login refresh skipped (%s) — using existing cookie file.", _e)
 
     if not os.path.isfile(COOKIE_FILE):
-        log.error("Cookie file missing: %s — run exotel_session.py --setup once, "
-                  "or paste a cookie into %s", COOKIE_FILE, COOKIE_FILE)
-        return 1
+        log.warning("[skip] Inbox session not available — no saved cookie (%s). "
+                    "Skipping the inbox scrape this run; call records are "
+                    "UNAFFECTED (Exotel Call Details still runs). Re-capture once "
+                    "with:  .venv\\Scripts\\python.exe common\\exotel_session.py "
+                    "--setup", COOKIE_FILE)
+        return 0
     cookie_str = open(COOKIE_FILE, encoding="utf-8").read().strip()
     cookies = parse_cookies(cookie_str)
 
@@ -202,28 +205,35 @@ def main():
         except Exception as _nav_err:
             _m = str(_nav_err)
             if "ERR_TOO_MANY_REDIRECTS" in _m or "redirect" in _m.lower():
-                log.error(
-                    "Exotel bounced the request in a login redirect loop "
-                    "(ERR_TOO_MANY_REDIRECTS) — the saved web session has "
-                    "expired. Re-capture it once with:  .venv\\Scripts\\"
-                    "python.exe common\\exotel_session.py --setup   (after "
-                    "that, every run auto-refreshes the cookie).")
+                log.warning(
+                    "[skip] Inbox session not available — Exotel bounced the "
+                    "request in a login redirect loop (the saved web session has "
+                    "expired). Skipping the inbox scrape this run; call records "
+                    "are UNAFFECTED (Exotel Call Details still runs). Re-capture "
+                    "once with:  .venv\\Scripts\\python.exe common\\"
+                    "exotel_session.py --setup   (after that, every run "
+                    "auto-refreshes the cookie).")
             else:
-                log.error(
-                    "Could not open the Inbox page (%s). If this persists, "
-                    "re-capture the session with:  .venv\\Scripts\\python.exe "
-                    "common\\exotel_session.py --setup", _nav_err)
+                log.warning(
+                    "[skip] Inbox session not available — could not open the "
+                    "Inbox page (%s). Skipping the inbox scrape this run; call "
+                    "records are UNAFFECTED. If this persists, re-capture with:  "
+                    ".venv\\Scripts\\python.exe common\\exotel_session.py "
+                    "--setup", _nav_err)
             browser.close()
-            return 2
+            return 0
 
         # Confirm we're logged in.
         try:
             page.wait_for_selector(".ex-inbox-cl-list li", timeout=20000)
         except Exception:
-            log.error("No call rows loaded — cookie likely expired. "
-                      "Re-capture the cookie and retry.")
+            log.warning("[skip] Inbox session not available — no call rows "
+                        "loaded (cookie likely expired). Skipping the inbox "
+                        "scrape this run; call records are UNAFFECTED (Exotel "
+                        "Call Details still runs). Re-capture with:  .venv\\"
+                        "Scripts\\python.exe common\\exotel_session.py --setup")
             browser.close()
-            return 2
+            return 0
 
         # --- Capture the agent id->name map (for Assign To) ---------------
         try:
