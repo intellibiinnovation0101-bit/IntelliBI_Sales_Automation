@@ -144,6 +144,9 @@ _R = {
         {"k": "last", "label": "Repeat-enquiry updated", "re": r"Repeat-enquiry refresh:\s*(\d+) contact"},
     ],
     "pyExotelInboxScrape": [
+        {"k": "note_if", "re": r"\[skip\] Inbox session not available",
+         "note": "Inbox session expired — scrape skipped this run (call records "
+                 "unaffected; refresh with common\\exotel_session.py --setup)"},
         {"k": "last", "label": "Call rows scraped", "re": r"Wrote (\d+) unique call rows"},
         {"k": "last", "label": "Notes captured", "re": r"Wrote (\d+) user-notes"},
     ],
