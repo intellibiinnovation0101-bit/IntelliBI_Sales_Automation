@@ -889,20 +889,23 @@ def is_lost_status(admission_status, lead_status, backout):
     return False
 
 
-# Leads whose latest/finalized Admission Status is "Not Interested" or
-# "Irrelevant" are dropped from EVERY Follow-Up report at the base Total
-# Follow-Up Pending cohort level, so they never reach any downstream count,
-# metric or detail tab (Overdue, Current/period pending, Done, Remaining,
+# Leads whose latest/finalized Admission Status OR Lead Status is "Not
+# Interested" or "Irrelevant" are dropped from EVERY Follow-Up report at the
+# base Total Follow-Up Pending cohort level, so they never reach any downstream
+# count, metric or detail tab (Overdue, Current/period pending, Done, Remaining,
 # Priority & Actions, Overall/Counsellor Follow-Up Trend, Counsellor
 # Performance, per-counsellor tabs, and the email figures).
 FOLLOWUP_EXCLUDED_STATUSES = ("not interested", "irrelevant")
 
 
 def is_followup_excluded_status(*statuses):
-    """True when ANY supplied Admission Status (the active Lead Information
-    sheet OR the Consolidate master — whichever carries the latest/finalized
-    value) is Not Interested or Irrelevant. Generic: applies to every lead by
-    its status, with no hard-coded mobile numbers."""
+    """True when ANY supplied status value is Not Interested or Irrelevant.
+
+    Pass every candidate that carries the latest/finalized state — the active
+    Lead Information sheet AND the Consolidate master, for BOTH the Admission
+    Status and the Lead Status columns. If any of them reads Not Interested or
+    Irrelevant, the lead is excluded from all Follow-Up reporting. Generic:
+    applies to every lead by its status, with no hard-coded mobile numbers."""
     for st in statuses:
         a = s(st).lower()
         if any(k in a for k in FOLLOWUP_EXCLUDED_STATUSES):
@@ -1554,10 +1557,11 @@ def assemble_leads(active, inactive, master_idx, meet_map, walkin_set, today):
             "_versions": lead_versions,
             "_next_raw": next_raw,
             "_master_next": m.get("next_followup_raw", ""),
-            # finalized Admission Status from the Consolidate master, kept so the
-            # base pending cohort can drop Not Interested / Irrelevant leads even
-            # when the active sheet's status is stale/blank.
+            # finalized Admission Status / Lead Status from the Consolidate
+            # master, kept so the base pending cohort can drop Not Interested /
+            # Irrelevant leads even when the active sheet's value is stale/blank.
             "_master_admission_status": m.get("admission_status", ""),
+            "_master_lead_status": m.get("lead_status", ""),
             "_record_ts": parse_dt(s(r.get(A["ts"]))) if A["ts"] else None,
             "_act_dt": act_dt,
             "_first_dt": first_dt,
@@ -3844,12 +3848,15 @@ def run():
             # Performance, per-counsellor tabs, ranking) stays consistent.
             if l.get("mobile") and l["mobile"] in enrolled_phones:
                 continue
-            # Exclude any lead whose latest/finalized Admission Status (active
-            # sheet OR Consolidate master) is Not Interested / Irrelevant, at the
-            # BASE pending cohort — so the lead disappears from every downstream
-            # Follow-Up report, metric and detail tab. Generic for every lead.
+            # Exclude any lead whose latest/finalized Admission Status OR Lead
+            # Status (active sheet OR Consolidate master) is Not Interested /
+            # Irrelevant, at the BASE pending cohort — so the lead disappears from
+            # every downstream Follow-Up report, metric and detail tab. Generic
+            # for every lead.
             if is_followup_excluded_status(l.get("admission_status"),
-                                           l.get("_master_admission_status")):
+                                           l.get("_master_admission_status"),
+                                           l.get("lead_status"),
+                                           l.get("_master_lead_status")):
                 fu_excluded_count += 1
                 continue
             k = _key(l)
@@ -3889,10 +3896,13 @@ def run():
             # excluded pending dataset (drop enrolled students here too).
             if l.get("mobile") and l["mobile"] in enrolled_phones:
                 continue
-            # ...and drop Not Interested / Irrelevant leads here too, so any
-            # display-based follow-up count stays aligned with the pending cohort.
+            # ...and drop Not Interested / Irrelevant leads here too (Admission
+            # Status OR Lead Status, active OR master), so any display-based
+            # follow-up count stays aligned with the pending cohort.
             if is_followup_excluded_status(l.get("admission_status"),
-                                           l.get("_master_admission_status")):
+                                           l.get("_master_admission_status"),
+                                           l.get("lead_status"),
+                                           l.get("_master_lead_status")):
                 continue
             k = _key(l)
             if k in disp_seen:
