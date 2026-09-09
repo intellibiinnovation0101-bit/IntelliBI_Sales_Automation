@@ -1689,16 +1689,10 @@ def merge_cluster(records):
         row[VALIDATION_FIELD] = "Yes" if is_valid_mobile(norm_phone(row.get("Mobile Number", ""))) else "No"
     # Existing relevance logic (remark-based) OR Admission Status = "Irrelevant"
     # OR the Remarks contains one of the configured 'irrelevant' keyword variants.
-    # Additional OR condition (existing terms left unchanged): a Lead Status of
-    # "Irrelevant" also makes the lead Irrelevant. Compared with clean_text (the
-    # standard cleanser: strip, collapse whitespace, unicode-normalise) + lower,
-    # so "Irrelevant", "irrelevant", "IRRELEVANT", " Irrelevant " all qualify.
     _admit_status = str(row.get("Admission Status", "")).strip().lower()
-    _lead_status_rel = clean_text(row.get("Lead Status", "")).lower()
     row[RELEVANCE_FIELD] = "No" if (remark_flags_irrelevant(_remark)
                                     or _admit_status == "irrelevant"
-                                    or remark_has_irrelevant_keyword(_remark)
-                                    or _lead_status_rel == "irrelevant") else "Yes"
+                                    or remark_has_irrelevant_keyword(_remark)) else "Yes"
 
     # interaction history + analytics
     hist, ordered, n_int = build_history(records)
@@ -1708,20 +1702,6 @@ def merge_cluster(records):
     row["Number of Interactions"] = str(n_int)
     row["Platforms Used"] = ", ".join(SOURCE_LABEL[s] for s in
                                       ["IntelliBI", "Walk-In", "Call", "WhatsApp", "Website"] if s in present)
-
-    # Additional Admission Status rule (an OR condition, NOT a replacement) —
-    # the existing Admission Status logic above is left completely unchanged.
-    # When the finalised Lead Status is "Irrelevant" (matched case-insensitively
-    # and tolerant of leading/trailing/extra spaces and normal formatting via
-    # clean_text — so "Irrelevant", "irrelevant", "IRRELEVANT", " Irrelevant "
-    # all qualify), the Admission Status is set to "Irrelevant" too. Every other
-    # Lead Status leaves the existing Admission Status value exactly as computed.
-    # Deliberately placed LAST so it cannot affect any logic above that reads the
-    # original Admission Status (e.g. the Lead Type "Unreachable" override or the
-    # relevance flag) — nothing else in the load is changed.
-    if clean_text(row.get("Lead Status", "")).lower() == "irrelevant":
-        row["Admission Status"] = "Irrelevant"
-
     return row
 
 
