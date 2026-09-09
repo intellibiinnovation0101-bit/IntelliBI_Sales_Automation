@@ -2689,8 +2689,11 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
         fresh_hex = TXT_GREEN_HEX if avg_daily_fresh > 15 else TXT_RED_HEX
         rel_hex = TXT_GREEN_HEX if avg_rel_pct > 80 else TXT_RED_HEX
         kpis2 = [
-            ("Fresh (Non-Referral)", fresh_nonref, fresh_hex),
-            ("Fresh-Relevant (Non-Referral)", fresh_rel_nonref, rel_hex),
+            ("Fresh (Non-Ref)", fresh_nonref, fresh_hex),
+            ("Fresh-Relevant (Non-Ref)", fresh_rel_nonref, rel_hex),
+            # Fresh-Relevant % — same value/colour as the Summary tab header's 3rd
+            # metric (Fresh-Relevant %: XX.X%), coloured by the > 80 verdict (rel_hex).
+            ("Fresh-Relevant %", f"{avg_rel_pct:.1f}%", rel_hex),
             ("Avg Daily Fresh (Non-Referral)", f"{avg_daily_fresh:.2f}", fresh_hex),
             ("Avg Daily Fresh-Relevant (Non-Referral)", f"{avg_daily_fresh_rel:.2f}", fresh_hex),
             ("Avg Daily Fresh-Relevant (Non-Referral)", f"{avg_rel_pct:.1f}%", rel_hex),
@@ -2702,15 +2705,19 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
         rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
         fresh_hex = TXT_GREEN_HEX if fresh_nonref > 15 else TXT_RED_HEX
         rel_hex = TXT_GREEN_HEX if rel_pct > 80 else TXT_RED_HEX
-        kpis2 = [("Fresh (Non-Referral)", fresh_nonref, fresh_hex),
-                 ("Fresh-Relevant (Non-Referral)", fresh_rel_nonref, rel_hex)]
+        kpis2 = [("Fresh (Non-Ref)", fresh_nonref, fresh_hex),
+                 ("Fresh-Relevant (Non-Ref)", fresh_rel_nonref, rel_hex),
+                 # Fresh-Relevant % — same value/colour as the Summary tab header's
+                 # 3rd metric (Fresh-Relevant %: XX.X%), coloured by the > 80 verdict.
+                 ("Fresh-Relevant %", f"{rel_pct:.1f}%", rel_hex)]
 
-    # Lead Completion % — added to the SECOND card row, colour-coded like the
-    # report header: strictly > 90 % is green, otherwise red. Same figure/logic as
-    # the Summary tab (Completed leads / all leads for this report).
+    # Lead Completion % — kept on its OWN line (a separate card row, below the
+    # Fresh/Fresh-Relevant metrics), colour-coded like the report header:
+    # strictly > 90 % is green, otherwise red. Same figure/logic as the Summary
+    # tab (Completed leads / all leads for this report).
     _comp_pct, _, _ = lead_completion_pct(active)
     _comp_hex = TXT_GREEN_HEX if _comp_pct > 90 else TXT_RED_HEX
-    kpis2.append(("Lead Completion %", f"{_comp_pct:.1f}%", _comp_hex))
+    kpis3 = [("Lead Completion %", f"{_comp_pct:.1f}%", _comp_hex)]
 
     def _cards(items):
         return "".join(
@@ -2723,6 +2730,7 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
             for lbl, v, color in items)
     cards = _cards(kpis)
     cards2 = _cards(kpis2)
+    cards3 = _cards(kpis3)          # Lead Completion % — rendered on its own line
 
     return f"""<html><body style="margin:0;padding:24px;background:#eef2f8;
   font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#1a2a48">
@@ -2740,7 +2748,9 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
       <table role="presentation" width="100%" style="border-collapse:separate;
         margin:0 -6px 10px"><tr>{cards}</tr></table>
       <table role="presentation" width="100%" style="border-collapse:separate;
-        margin:0 -6px 20px"><tr>{cards2}</tr></table>
+        margin:0 -6px 8px"><tr>{cards2}</tr></table>
+      <table role="presentation" width="100%" style="border-collapse:separate;
+        margin:0 -6px 20px"><tr>{cards3}</tr></table>
       <p style="margin:0 0 22px;line-height:1.5">The full report covers lead-source
         &amp; counsellor performance, fresh vs. repeat leads, and each lead's complete
         journey from first enquiry to the latest interaction.</p>

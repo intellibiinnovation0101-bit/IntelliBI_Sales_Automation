@@ -1689,16 +1689,10 @@ def merge_cluster(records):
         row[VALIDATION_FIELD] = "Yes" if is_valid_mobile(norm_phone(row.get("Mobile Number", ""))) else "No"
     # Existing relevance logic (remark-based) OR Admission Status = "Irrelevant"
     # OR the Remarks contains one of the configured 'irrelevant' keyword variants.
-    # Additional OR condition (existing terms left unchanged): a Lead Status of
-    # "Irrelevant" also makes the lead Irrelevant. Compared with clean_text (the
-    # standard cleanser: strip, collapse whitespace, unicode-normalise) + lower,
-    # so "Irrelevant", "irrelevant", "IRRELEVANT", " Irrelevant " all qualify.
     _admit_status = str(row.get("Admission Status", "")).strip().lower()
-    _lead_status_rel = clean_text(row.get("Lead Status", "")).lower()
     row[RELEVANCE_FIELD] = "No" if (remark_flags_irrelevant(_remark)
                                     or _admit_status == "irrelevant"
-                                    or remark_has_irrelevant_keyword(_remark)
-                                    or _lead_status_rel == "irrelevant") else "Yes"
+                                    or remark_has_irrelevant_keyword(_remark)) else "Yes"
 
     # interaction history + analytics
     hist, ordered, n_int = build_history(records)
