@@ -114,7 +114,8 @@ RESULT_INACTIVE_TABS = ["IntelliBI Lead Information InActive",
                         "IntelliBI Lead Information InAc"]
 
 MASTER_SHEET_ID  = "1zZQjXnMJD96Ca0MNyfSt4-XS0z5w3rT7WPdb9qsP1Gs"   # Consolidate Sales Tracking
-MASTER_TABS      = None          # None -> first tab
+MASTER_TABS      = None          # None ->
+# first tab
 
 # Already-enrolled students. Anyone whose phone appears here is EXCLUDED from all
 # Follow-Up Pending calculations/details (they have already enrolled, so there is

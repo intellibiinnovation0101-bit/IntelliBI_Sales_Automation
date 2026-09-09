@@ -277,21 +277,6 @@ MATCH_KEYS = ["Sid"]
 UNAVAILABLE_BLANK = ["FromName", "ToName", "Outcome",
                      "Assign To", "Notes", "Transcription"]
 
-# ── Fallback ToName mapping (internal agent / escalation numbers) ─────────────
-# Priority 2: the CCM API / Address Book only carry customer-contact names, so
-# the ATTENDEE (internal agent / escalation) name is often missing — which is why
-# ToName stays blank even though the To phone number is present. When ToName is
-# still blank after API enrichment, derive it from the To number using this map.
-# Keys are the LAST-10 digits (matched via ec._digits10), so formatting
-# differences — leading/trailing spaces, +91 / 91 country code, a leading 0,
-# numeric-vs-string — all resolve to the same key automatically.
-TO_NAME_FALLBACK = {
-    "7387028359": "Akash Sahu",
-    "8484989915": "ArshKhan Pathan",
-    "9022344821": "Harish Rathod",
-    "9970691112": "IntelliBI Escalation",   # 09970691112 → last 10 digits
-}
-
 
 # ══════════════════════════════════════════════════════════════════════════
 #  LOGGING
@@ -745,24 +730,6 @@ def main():
                         c_applied += 1
                 log.info("Applied Address-Book names to %d of %d calls.",
                          c_applied, len(rows))
-
-        # FALLBACK ToName (Priority 2): when the API/Address-Book sources gave no
-        # attendee name, derive ToName from the To number for known internal
-        # agent / escalation numbers. Runs regardless of the enrichment switches,
-        # fills ONLY where ToName is still blank (never overwrites a real name),
-        # and leaves unknown numbers blank (Priority 3 — never assign a wrong
-        # person). ec._digits10 normalises spaces / +91 / 91 / leading 0 / int.
-        if TO_NAME_FALLBACK:
-            fb_applied = 0
-            for r in rows:
-                if not str(r.get("ToName", "")).strip():
-                    _nm = TO_NAME_FALLBACK.get(ec._digits10(r.get("To", "")))
-                    if _nm:
-                        r["ToName"] = _nm
-                        fb_applied += 1
-            if fb_applied:
-                log.info("Applied fallback ToName mapping to %d of %d calls.",
-                         fb_applied, len(rows))
 
         # Reuse the project's shared, authenticated Sheets client.
         service = utils.get_sheets_service()
