@@ -85,11 +85,11 @@ if _SCHED_TRIGGER_TIME:
 # Email the report links to management?  True / False
 SEND_EMAIL       = True
 EMAIL_RECIPIENTS = [
-    "harishintellibi@gmail.com",
-    "salesintellibi01@gmail.com",
+    # "harishintellibi@gmail.com",
+    # "salesintellibi01@gmail.com",
     "info@intellibiinnovationstechnologies.in",
-    "salesintellibi03@gmail.com",
-    "163manish.sharma@gmail.com"
+    # "salesintellibi03@gmail.com",
+    # "163manish.sharma@gmail.com"
 ]
 
 # Recipients who must receive a MASKED copy of the report — every lead's Mobile
@@ -617,7 +617,7 @@ LEAD_COLS = [C_FIRST, C_LATEST, C_NAME, C_MOBILE, C_EMAIL, C_PLAT, "_ninper",
              "New/Follow-Up", C_VALID, C_RELEV, C_REF, C_REFNAME, C_COURSE,
              C_STATUS, C_ADM, C_BACKOUT, C_COUNSEL, C_GMEET, C_WALKSCH]
 LEAD_HEADERS = ["First Enquiry", "Latest Enquiry", "Full Name", "Mobile Number",
-                "Platforms Used", "Interactions",
+                "Email", "Platforms Used", "Interactions (in period)", "Lead Type",
                 "Phone Valid", "Relevant", "Is Referral", "Referrer's Name",
                 "Course Interested", "Lead Status", "Admission Status",
                 "Backout Reason", "Counselling By", "Google Meet Sch.", "Walk-in Sch.",
@@ -708,7 +708,8 @@ def lead_detail_rows(tab, leads):
         status = lead_info_status(plats)
         tab.row([
             a.get(C_FIRST), a.get(C_LATEST), a.get(C_NAME), a.get(C_MOBILE),
-            plats, a["_ninper"],
+            a.get(C_EMAIL), plats, a["_ninper"],
+            "Fresh" if a["_is_new"] else "Repeat",
             a.get(C_VALID), a.get(C_RELEV), a.get(C_REF), a.get(C_REFNAME),
             a.get(C_COURSE), a.get(C_STATUS), a.get(C_ADM), a.get(C_BACKOUT),
             a.get(C_COUNSEL), a.get(C_GMEET), a.get(C_WALKSCH),

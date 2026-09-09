@@ -52,14 +52,14 @@ def now_ist():
 # ============================================================
 # REPORT GENERATION CONFIGURATION
 # ============================================================
-GENERATE_DAILY_REPORT   = True
+GENERATE_DAILY_REPORT   = False
 GENERATE_WEEKLY_REPORT   = False
-GENERATE_MONTHLY_REPORT  = False
+GENERATE_MONTHLY_REPORT  = True
 
 # Optional manual report periods (leave as None to use the defaults below).
 DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
-MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
+MONTHLY_REPORT_MONTH         = 8 #None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
 
 # ── Scheduled-run report selection (scheduler only) ──────────────────────────
@@ -364,7 +364,6 @@ class Tab:
         self.filter_headers = [] # header row indices that get a filter
         self.kpi = set()         # rows whose text is bold (headline KPIs)
         self.chart = None        # optional chart spec (dict) drawn on this tab
-        self.cell_fills = {}     # {(row_idx, col_idx): (rgb, hex)} per-cell overrides
 
     def banner(self, text):
         self.banners.add(len(self.rows)); self.rows.append([text])
@@ -617,11 +616,11 @@ LEAD_COLS = [C_FIRST, C_LATEST, C_NAME, C_MOBILE, C_EMAIL, C_PLAT, "_ninper",
              "New/Follow-Up", C_VALID, C_RELEV, C_REF, C_REFNAME, C_COURSE,
              C_STATUS, C_ADM, C_BACKOUT, C_COUNSEL, C_GMEET, C_WALKSCH]
 LEAD_HEADERS = ["First Enquiry", "Latest Enquiry", "Full Name", "Mobile Number",
-                "Platforms Used", "Interactions",
+                "Email", "Platforms Used", "Interactions (in period)", "Lead Type",
                 "Phone Valid", "Relevant", "Is Referral", "Referrer's Name",
                 "Course Interested", "Lead Status", "Admission Status",
                 "Backout Reason", "Counselling By", "Google Meet Sch.", "Walk-in Sch.",
-                "Lead Journey (Enquiry → Latest)", "Lead Information Status"]
+                "Lead Journey (Enquiry → Latest)"]
 
 
 def format_journey(hist_text):
@@ -655,71 +654,20 @@ def platforms_in_sequence(row):
     return ", ".join(seq) if seq else s(row.get(C_PLAT))
 
 
-# ── Lead Information Status (IntelliBI completeness) ─────────────────────────
-# IntelliBI is mandatory ONLY when the lead was handled via Call / Website /
-# WhatsApp. For those, IntelliBI must also be present in 'Platforms Used' for the
-# lead to be Completed; otherwise Pending. Any lead that used none of those three
-# platforms is Completed by default. Matching is token-based and robust to case,
-# spaces, separators and ordering.
-_INTELLIBI_MANDATORY_PLATFORMS = {"call", "website", "whatsapp"}
-
-
-def _platform_token_set(value):
-    """Normalised set of platform tokens from a 'Platforms Used' cell — lower-
-    cased with all internal/edge whitespace removed, so 'Call , IntelliBI',
-    'call,intellibi' and 'WhatsApp , Call' all compare equal regardless of order."""
-    out = set()
-    for part in re.split(r"[,;/|]", str(value or "")):
-        tok = re.sub(r"\s+", "", part).lower()
-        if tok:
-            out.add(tok)
-    return out
-
-
-def lead_info_status(platforms_used):
-    """'Completed' or 'Pending' for a lead's 'Platforms Used' value.
-      • Contains Call / Website / WhatsApp  -> needs IntelliBI too (else Pending).
-      • Contains none of those three        -> Completed (IntelliBI not required)."""
-    toks = _platform_token_set(platforms_used)
-    if not (toks & _INTELLIBI_MANDATORY_PLATFORMS):
-        return "Completed"
-    return "Completed" if "intellibi" in toks else "Pending"
-
-
-def lead_completion_pct(leads):
-    """(pct, completed, total) for a set of leads. Denominator = ALL leads (every
-    lead is either Completed or Pending). Uses the same Platforms-Used value shown
-    in the detail column (platforms_in_sequence) so the % matches the rows."""
-    total = len(leads)
-    if not total:
-        return 0.0, 0, 0
-    completed = sum(1 for a in leads
-                    if lead_info_status(platforms_in_sequence(a)) == "Completed")
-    return completed / total * 100.0, completed, total
-
-
 def lead_detail_rows(tab, leads):
     tab.header(LEAD_HEADERS, filterable=True)
-    status_ci = len(LEAD_HEADERS) - 1     # 0-based col index of Lead Information Status
     # Sort every lead-detail tab by the First Enquiry datetime, ascending
     # (oldest first). Uses the parsed datetime, not text; blanks sort last.
     for a in sorted(leads, key=lambda x: (parse_dt(x.get(C_FIRST)) or datetime.max)):
-        plats = platforms_in_sequence(a)
-        status = lead_info_status(plats)
         tab.row([
             a.get(C_FIRST), a.get(C_LATEST), a.get(C_NAME), a.get(C_MOBILE),
-            plats, a["_ninper"],
+            a.get(C_EMAIL), platforms_in_sequence(a), a["_ninper"],
+            "Fresh" if a["_is_new"] else "Repeat",
             a.get(C_VALID), a.get(C_RELEV), a.get(C_REF), a.get(C_REFNAME),
             a.get(C_COURSE), a.get(C_STATUS), a.get(C_ADM), a.get(C_BACKOUT),
             a.get(C_COUNSEL), a.get(C_GMEET), a.get(C_WALKSCH),
-            format_journey(a.get(C_HIST)), status,
+            format_journey(a.get(C_HIST)),
         ])
-        # Colour ONLY the status cell — Completed=green, Pending=red, bold — so it
-        # overrides the row's Fresh/Repeat tint without disturbing other cells.
-        _ri = len(tab.rows) - 1
-        tab.cell_fills[(_ri, status_ci)] = ((CLR_GREEN, HEX["GREEN"])
-                                            if status == "Completed"
-                                            else (CLR_RED, HEX["RED"]))
 
 
 # Headline exec-summary metrics rendered in bold.
@@ -784,18 +732,13 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
                                 else (TXT_RED, TXT_RED_HEX))
         rel_rgb, rel_hex = ((TXT_GREEN, TXT_GREEN_HEX) if rel_pct > 80
                             else (TXT_RED, TXT_RED_HEX))
-        _comp_pct, _, _ = lead_completion_pct(active)
-        _comp_rgb, _comp_hex = ((TXT_GREEN, TXT_GREEN_HEX) if _comp_pct > 90
-                                else (TXT_RED, TXT_RED_HEX))
         segs = [
-            ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            ("Fresh (Non-Referral):  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_nonref), fresh_rgb, fresh_hex),
-            (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            (_SEP + "Fresh-Relevant (Non-Referral):  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_rel_nonref), rel_rgb, rel_hex),
-            (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            (_SEP + "Fresh-Relevant (Non-Referral):  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (f"{rel_pct:.1f}%", rel_rgb, rel_hex),
-            (_SEP + "Lead Completion %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-            (f"{_comp_pct:.1f}%", _comp_rgb, _comp_hex),
         ]
     elif period_label in ("Weekly", "Monthly") and start is not None and end is not None:
         # Weekly/Monthly: add per-day averages and colour all four the same way
@@ -809,11 +752,8 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
                                 else (TXT_RED, TXT_RED_HEX))
         rel_rgb, rel_hex = ((TXT_GREEN, TXT_GREEN_HEX) if rel_pct > 80
                             else (TXT_RED, TXT_RED_HEX))
-        _comp_pct, _, _ = lead_completion_pct(active)
-        _comp_rgb, _comp_hex = ((TXT_GREEN, TXT_GREEN_HEX) if _comp_pct > 90
-                                else (TXT_RED, TXT_RED_HEX))
         segs = [
-            ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            ("Non-Referral →   Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_nonref), fresh_rgb, fresh_hex),
             (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_rel_nonref), rel_rgb, rel_hex),
@@ -823,8 +763,6 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
             (f"{avg_daily_fresh_rel:.2f}", fresh_rgb, fresh_hex),
             (_SEP + "Avg Daily Fresh-Relevant %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (f"{rel_pct:.1f}%", rel_rgb, rel_hex),
-            (_SEP + "Lead Completion %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-            (f"{_comp_pct:.1f}%", _comp_rgb, _comp_hex),
         ]
 
     if segs:
@@ -863,39 +801,6 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
     t.row(["Walk-ins Scheduled", sum(1 for a in active if yes(a.get(C_WALKSCH)))])
     t.row(["Google Meets Scheduled", sum(1 for a in active if yes(a.get(C_GMEET)))])
     return t
-
-
-def _apply_metric_header_line(tab, leads):
-    """Inject the 'Fresh | Fresh-Relevant | Fresh-Relevant % | Lead Completion %'
-    metric line into the tab's (blank) second header row — same colour-run style as
-    the Summary tab. Used by each individual counsellor tab so it carries its OWN
-    metrics and its OWN Lead Completion %. Lead Completion % is coloured dark green
-    (bold) when strictly greater than 90 %, else red (bold)."""
-    _SEP = "     |     "
-    fresh_nonref = sum(1 for a in leads if a.get("_is_new") and not is_referral(a))
-    fresh_rel = sum(1 for a in leads if a.get("_is_new") and not is_referral(a)
-                    and yes(a.get(C_RELEV)))
-    rel_pct = (fresh_rel / fresh_nonref * 100.0) if fresh_nonref else 0.0
-    comp_pct, _, _ = lead_completion_pct(leads)
-    comp_rgb, comp_hex = ((TXT_GREEN, TXT_GREEN_HEX) if comp_pct > 90
-                          else (TXT_RED, TXT_RED_HEX))
-    segs = [
-        ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-        (str(fresh_nonref), CLR_SUB_FG, HEX["SUB_FG"]),
-        (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-        (str(fresh_rel), CLR_SUB_FG, HEX["SUB_FG"]),
-        (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-        (f"{rel_pct:.1f}%", CLR_SUB_FG, HEX["SUB_FG"]),
-        (_SEP + "Lead Completion %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-        (f"{comp_pct:.1f}%", comp_rgb, comp_hex),
-    ]
-    text = "".join(seg[0] for seg in segs)
-    if len(tab.rows) > 1:
-        tab.rows[1] = [text]                       # replace the blank second line
-    else:
-        tab.rows.append([text])
-    tab.avg_line = {"row": 1, "segments": segs, "text": text, "size": 13}
-    tab.blank()
 
 
 def sanitize_tab_name(name):
@@ -1645,7 +1550,6 @@ def build_report(period_label, period_range, df, start, end):
             tname = sanitize_tab_name("CB - " + cb + " ")
         tb = Tab(tname)
         add_report_header(tb, f"Counsellor: {cb}", period_range, gen_stamp)
-        _apply_metric_header_line(tb, leads)       # per-counsellor metrics + Lead Completion %
         add_exec_summary(tb, leads)
         # Lead Source Performance for THIS counsellor's leads — same structure and
         # logic as the main Summary tab (source_perf + SRC_HEADER), scoped to the
@@ -2053,12 +1957,6 @@ def write_workbook(sheets, spreadsheet_id, tabs):
                 elif bold:
                     fmt_reqs.append(_fmt_range(sid, ri, ri + 1, 0, w, bold=True))
 
-        # per-cell overrides (Lead Information Status: Completed=green / Pending=red,
-        # bold) — applied after the row fill so only that one cell is recoloured.
-        for (cf_ri, cf_ci), (cf_rgb, _cf_hex) in getattr(tab, "cell_fills", {}).items():
-            fmt_reqs.append(_fmt_range(sid, cf_ri, cf_ri + 1, cf_ci, cf_ci + 1,
-                                       bold=True, bg=cf_rgb))
-
         # filter on the primary detail table (spanning that table's width)
         if tab.filter_headers:
             hi = tab.filter_headers[0]
@@ -2316,11 +2214,6 @@ def write_local_xlsx(path, tabs):
                     if band:
                         cell.fill = fill(band)
                     if bold:
-                        cell.font = Font(bold=True)
-                    # per-cell override (Lead Information Status green/red, bold)
-                    _cf = tab.cell_fills.get((ri, ci - 1)) if getattr(tab, "cell_fills", None) else None
-                    if _cf:
-                        cell.fill = fill(_cf[1])
                         cell.font = Font(bold=True)
                     if "\n" in str(cell.value or ""):   # multi-line (Lead Journey)
                         cell.alignment = Alignment(wrap_text=True, vertical="top")
