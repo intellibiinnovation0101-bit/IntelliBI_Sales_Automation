@@ -2705,13 +2705,6 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
         kpis2 = [("Fresh (Non-Referral)", fresh_nonref, fresh_hex),
                  ("Fresh-Relevant (Non-Referral)", fresh_rel_nonref, rel_hex)]
 
-    # Lead Completion % — added to the SECOND card row, colour-coded like the
-    # report header: strictly > 90 % is green, otherwise red. Same figure/logic as
-    # the Summary tab (Completed leads / all leads for this report).
-    _comp_pct, _, _ = lead_completion_pct(active)
-    _comp_hex = TXT_GREEN_HEX if _comp_pct > 90 else TXT_RED_HEX
-    kpis2.append(("Lead Completion %", f"{_comp_pct:.1f}%", _comp_hex))
-
     def _cards(items):
         return "".join(
             "<td style='padding:6px'>"
