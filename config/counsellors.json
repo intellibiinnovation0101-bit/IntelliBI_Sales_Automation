@@ -1,0 +1,26 @@
+{
+  "lead_target_per_counsellor": 7,
+  "counsellors": [
+    {
+      "counsellor_id": "C001",
+      "counsellor_name": "Harish Rathod",
+      "rank": 1,
+      "office_number": "9022344821",
+      "current_status": "Active"
+    },
+    {
+      "counsellor_id": "C002",
+      "counsellor_name": "Akash Sahu",
+      "rank": 2,
+      "office_number": "7387028359",
+      "current_status": "Active"
+    },
+    {
+      "counsellor_id": "C003",
+      "counsellor_name": "ArshKhan Pathan",
+      "rank": 3,
+      "office_number": "8484989915",
+      "current_status": "Active"
+    }
+  ]
+}

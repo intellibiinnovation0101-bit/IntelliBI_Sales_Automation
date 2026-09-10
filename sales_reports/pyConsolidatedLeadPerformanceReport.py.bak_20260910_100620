@@ -53,14 +53,14 @@ def now_ist():
 # ============================================================
 # REPORT GENERATION CONFIGURATION
 # ============================================================
-GENERATE_DAILY_REPORT   = False
+GENERATE_DAILY_REPORT   = True
 GENERATE_WEEKLY_REPORT   = False
-GENERATE_MONTHLY_REPORT  = True
+GENERATE_MONTHLY_REPORT  = False
 
 # Optional manual report periods (leave as None to use the defaults below).
 DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
-MONTHLY_REPORT_MONTH         = 8 #None      # e.g. 7   (1-12)
+MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
 
 # ── Scheduled-run report selection (scheduler only) ──────────────────────────
@@ -882,24 +882,15 @@ def _apply_metric_header_line(tab, leads):
                     and yes(a.get(C_RELEV)))
     rel_pct = (fresh_rel / fresh_nonref * 100.0) if fresh_nonref else 0.0
     comp_pct, _, _ = lead_completion_pct(leads)
-    # Fresh — coloured against THIS counsellor's own target (lead_target_per_counsellor
-    # from counsellors.json): >= target -> green, else red.
-    _target = lead_target_per_counsellor()
-    fresh_rgb, fresh_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref >= _target
-                            else (TXT_RED, TXT_RED_HEX))
-    # Fresh-Relevant count AND its % share one verdict, driven by the % (>= 80 ->
-    # green, else red) — same approach as the Summary tab header.
-    rel_rgb, rel_hex = ((TXT_GREEN, TXT_GREEN_HEX) if rel_pct >= 80
-                        else (TXT_RED, TXT_RED_HEX))
     comp_rgb, comp_hex = ((TXT_GREEN, TXT_GREEN_HEX) if comp_pct > 90
                           else (TXT_RED, TXT_RED_HEX))
     segs = [
         ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-        (str(fresh_nonref), fresh_rgb, fresh_hex),
+        (str(fresh_nonref), CLR_SUB_FG, HEX["SUB_FG"]),
         (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-        (str(fresh_rel), rel_rgb, rel_hex),
-        (_SEP + "Fresh-Relevant %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
-        (f"{rel_pct:.1f}%", rel_rgb, rel_hex),
+        (str(fresh_rel), CLR_SUB_FG, HEX["SUB_FG"]),
+        (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+        (f"{rel_pct:.1f}%", CLR_SUB_FG, HEX["SUB_FG"]),
         (_SEP + "Lead Completion %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (f"{comp_pct:.1f}%", comp_rgb, comp_hex),
     ]
@@ -968,19 +959,6 @@ def fresh_nonref_target():
                      if str(c.get("current_status", "")).strip().lower() == "active")
         expected = target * active
         return expected if expected > 0 else _FRESH_TARGET_FALLBACK
-    except Exception:
-        return _FRESH_TARGET_FALLBACK
-
-
-def lead_target_per_counsellor():
-    """The PER-counsellor Fresh target = lead_target_per_counsellor read LIVE from
-    config/counsellors.json (NOT multiplied by the counsellor count). Used to
-    colour the Fresh figure on each individual counsellor tab header. Falls back
-    to the legacy threshold if the config is missing/malformed/non-positive."""
-    try:
-        with open(_COUNSELLORS_JSON, encoding="utf-8") as f:
-            target = int(json.load(f).get("lead_target_per_counsellor", 0))
-        return target if target > 0 else _FRESH_TARGET_FALLBACK
     except Exception:
         return _FRESH_TARGET_FALLBACK
 # How many columns the day-wise header colour band spans. The full single-line
