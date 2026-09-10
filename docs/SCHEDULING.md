@@ -1,11 +1,11 @@
 # Scheduling — IntelliBI Sales Automation
 
-The Sales pipeline runs the full `scripts/run_all.py` **five times a day**, with
+The Sales pipeline runs the full `scripts/run_all.py` **six times a day**, with
 overlap protection so a new run never starts while the previous one is still
 going.
 
-| Trigger | 11:00 | 14:00 | 17:00 | 20:00 | 23:00 |
-|---------|-------|-------|-------|-------|-------|
+| Trigger | 11:00 | 14:00 | 17:00 | 18:45 | 21:00 | 23:00 |
+|---------|-------|-------|-------|-------|-------|-------|
 
 Each run executes the complete pipeline in dependency order (Layer 1 → 2 → 3) and
 e-mails the detailed summary log to `info@intellibiinnovationstechnologies.in`.
@@ -19,7 +19,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup_schedule.ps1
 ```
 
 That registers a single Task Scheduler task named **"IntelliBI Sales Automation"**
-with the five daily triggers. All paths are derived from the script's own
+with the six daily triggers. All paths are derived from the script's own
 location, so it works on any machine/folder with nothing to edit. It uses the
 project's `.venv\Scripts\python.exe` if present, else `python`.
 
@@ -57,7 +57,7 @@ Manual test without the scheduler:
 
 ## Manual GUI alternative
 
-If you prefer the Task Scheduler UI: create a task, add five **Daily** triggers
+If you prefer the Task Scheduler UI: create a task, add six **Daily** triggers
 at the times above, Action = *Start a program* → `run_all.bat` with **Start in**
 = the project folder, and set *"Do not start a new instance"* under Settings.
 (The PowerShell registrar above is preferred because it also wires in the file
@@ -65,3 +65,4 @@ lock via `run_scheduled.py`.)
 
 ## Change history
 - 2026-08-24 — Added scheduling (5×/day, overlap-protected) via `run_scheduled.py` + `setup_schedule.ps1`.
+- 2026-09-10 — Schedule changed to 6×/day: added 18:45 and moved 20:00 → 21:00 (now 11:00, 14:00, 17:00, 18:45, 21:00, 23:00). Re-run `setup_schedule.ps1` as Administrator to apply.

@@ -2,8 +2,8 @@
 ================================================================================
   IntelliBI Sales Automation — Task Scheduler registrar
   ------------------------------------------------------------------------------
-  Registers ONE scheduled task that runs the full Sales pipeline five times a
-  day (11:00, 14:00, 17:00, 20:00, 23:00). Overlap protection is enforced two
+  Registers ONE scheduled task that runs the full Sales pipeline six times a
+  day (11:00, 14:00, 17:00, 18:45, 21:00, 23:00). Overlap protection is enforced two
   ways: the task's MultipleInstances policy is IgnoreNew, AND scripts/run_scheduled.py
   holds an OS file lock — so a new trigger never starts while a previous run is
   still in progress.
@@ -25,7 +25,7 @@ $py      = Join-Path $proj ".venv\Scripts\python.exe"
 if (-not (Test-Path $py)) { $py = "python" }
 
 $taskName = "IntelliBI Sales Automation"
-$times    = @("11:00","14:00","17:00","20:00","23:00")
+$times    = @("11:00","14:00","17:00","18:45","21:00","23:00")
 
 Write-Host "Project : $proj"
 Write-Host "Python  : $py"
