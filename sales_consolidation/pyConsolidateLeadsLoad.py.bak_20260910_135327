@@ -168,15 +168,10 @@ ANALYTICS_FIELDS = [
 #   IsPhoneNumberValid : Yes/No on the normalised mobile (with "invalid" remark
 #                        exception)
 #   IsLeadRelevant     : No if the remark indicates an irrelevant lead, else Yes
-#   IsWhatsAppWebConnect: No when the lead used only Website/WhatsApp (optionally
-#                        with IntelliBI) AND Admission Status is "Unable to
-#                        Connect"; otherwise Yes
 VALIDATION_FIELD = "IsPhoneNumberValid"
 RELEVANCE_FIELD  = "IsLeadRelevant"
-WHATSAPP_WEB_CONNECT_FIELD = "IsWhatsAppWebConnect"
 
-MASTER_COLUMNS = (TARGET_FIELDS + TRACKING_FIELDS
-                  + [VALIDATION_FIELD, RELEVANCE_FIELD, WHATSAPP_WEB_CONNECT_FIELD]
+MASTER_COLUMNS = (TARGET_FIELDS + TRACKING_FIELDS + [VALIDATION_FIELD, RELEVANCE_FIELD]
                   + [HISTORY_FIELD] + ANALYTICS_FIELDS)
 
 # Source-priority for filling a field (lower rank wins). IntelliBI Lead
@@ -187,27 +182,6 @@ COUNSELLING_PRIORITY = ["IntelliBI", "Call", "WhatsApp", "Walk-In", "Website"]
 # Human label for the interaction history "Lead Source" line.
 SOURCE_LABEL = {"IntelliBI": "IntelliBI", "Walk-In": "Walk-In", "Website": "Website",
                 "WhatsApp": "WhatsApp", "Call": "Call"}
-
-# Platforms that qualify a lead for the WhatsApp/Web-connect flag: it used ONLY
-# Website / WhatsApp (optionally the internal IntelliBI portal) and nothing else.
-# IntelliBI on its own does NOT qualify — at least one of Website / WhatsApp must
-# be present.
-_WA_WEB_ALLOWED_PLATFORMS = {"website", "whatsapp", "intellibi"}
-_WA_WEB_CORE_PLATFORMS    = {"website", "whatsapp"}
-
-
-def _is_web_whatsapp_only(platforms_used):
-    """True when 'Platforms Used' contains only Website/WhatsApp (optionally plus
-    IntelliBI) with at least one of Website/WhatsApp present, and NO other
-    platform. Case- and whitespace-insensitive; tolerant of , ; / | separators."""
-    toks = set()
-    for part in re.split(r"[,;/|]", str(platforms_used or "")):
-        tok = re.sub(r"\s+", "", part).lower()
-        if tok:
-            toks.add(tok)
-    if not toks or not toks.issubset(_WA_WEB_ALLOWED_PLATFORMS):
-        return False
-    return bool(toks & _WA_WEB_CORE_PLATFORMS)
 
 
 # ---------------------------------------------------------------------------
@@ -1747,16 +1721,6 @@ def merge_cluster(records):
     # relevance flag) — nothing else in the load is changed.
     if clean_text(row.get("Lead Status", "")).lower() == "irrelevant":
         row["Admission Status"] = "Irrelevant"
-
-    # IsWhatsAppWebConnect — flag a Website/WhatsApp lead (optionally routed via the
-    # IntelliBI portal) that could not be reached. Set to "No" only when BOTH hold:
-    #   1) Platforms Used is only Website/WhatsApp (optionally + IntelliBI), and
-    #   2) Admission Status == "Unable to Connect" (case/space-insensitive).
-    # Any other platform present, or any other Admission Status, leaves it "Yes".
-    # Evaluated last so it reflects the finalised Platforms Used / Admission Status.
-    _wa_web_only = _is_web_whatsapp_only(row.get("Platforms Used", ""))
-    _unable_to_connect = clean_text(row.get("Admission Status", "")).lower() == "unable to connect"
-    row[WHATSAPP_WEB_CONNECT_FIELD] = "No" if (_wa_web_only and _unable_to_connect) else "Yes"
 
     return row
 
