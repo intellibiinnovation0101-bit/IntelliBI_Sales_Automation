@@ -58,7 +58,7 @@ GENERATE_WEEKLY_REPORT   = False
 GENERATE_MONTHLY_REPORT  = False
 
 # Optional manual report periods (leave as None to use the defaults below).
-DAILY_REPORT_DATE            = "2026-09-09"      ## e.g. "2026-09-01"
+DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
 MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
@@ -86,11 +86,11 @@ if _SCHED_TRIGGER_TIME:
 # Email the report links to management?  True / False
 SEND_EMAIL       = True
 EMAIL_RECIPIENTS = [
-    "harishintellibi@gmail.com",
-    "salesintellibi01@gmail.com",
+    # "harishintellibi@gmail.com",
+    # "salesintellibi01@gmail.com",
     "info@intellibiinnovationstechnologies.in",
-    "salesintellibi03@gmail.com",
-    "163manish.sharma@gmail.com"
+    # "salesintellibi03@gmail.com",
+    # "163manish.sharma@gmail.com"
 ]
 
 # Recipients who must receive a MASKED copy of the report — every lead's Mobile
@@ -172,7 +172,6 @@ C_GMEET   = "IsGoogleMeetSchedule"
 C_WALKSCH = "IsWalkInSchedule"
 C_VALID   = "IsPhoneNumberValid"
 C_RELEV   = "IsLeadRelevant"
-C_WACONNECT = "IsWhatsAppWebConnect"     # "No" = Website/WhatsApp lead that could not be connected
 C_REF     = "IsReferral"
 C_REFNAME = "Referrer's Name"
 C_HIST    = "Lead Interaction History"
@@ -314,35 +313,6 @@ def parse_history(text):
 
 def is_referral(row):
     return yes(row.get(C_REF)) or bool(s(row.get(C_REFNAME)))
-
-
-# ── "Connected" metrics (IsWhatsAppWebConnect) — central definitions ──────────
-# A lead is "connected" unless its IsWhatsAppWebConnect is explicitly "No"
-# (a Website/WhatsApp lead that could not be reached). Blank / missing / "Yes"
-# all count as connected. Matching is case- and whitespace-insensitive.
-def is_wa_web_connected(row):
-    return s(row.get(C_WACONNECT)).strip().lower() != "no"
-
-
-def count_fresh_nonref(leads):
-    """Fresh (Non-Ref): fresh/new leads excluding referrals. UNCHANGED definition —
-    the raw denominator used by Fresh-Relevant %."""
-    return sum(1 for a in leads if a.get("_is_new") and not is_referral(a))
-
-
-def count_fresh_nonref_connected(leads):
-    """Fresh (Non-Ref Connected) = Fresh (Non-Ref) minus the not-connected
-    (IsWhatsAppWebConnect = No) leads."""
-    return sum(1 for a in leads if a.get("_is_new") and not is_referral(a)
-               and is_wa_web_connected(a))
-
-
-def count_fresh_rel_nonref_connected(leads):
-    """Fresh-Relevant (Non-Ref), UPDATED = fresh non-ref Relevant leads minus the
-    not-connected ones. This is the value now shown as 'Fresh-Relevant (Non-Ref)'
-    throughout the report (header, email, counsellor tabs)."""
-    return sum(1 for a in leads if a.get("_is_new") and not is_referral(a)
-               and yes(a.get(C_RELEV)) and is_wa_web_connected(a))
 
 
 def is_admission_confirmed(row):
@@ -508,7 +478,6 @@ def exec_summary(active):
     rel = sum(1 for a in active if yes(a.get(C_RELEV)))
     irr = sum(1 for a in active if s(a.get(C_RELEV)).lower() == "no")
     ref = sum(1 for a in active if is_referral(a))
-    fresh_nonref_conn = count_fresh_nonref_connected(active)
     gmeet = sum(1 for a in active if yes(a.get(C_GMEET)))
     walk = sum(1 for a in active if yes(a.get(C_WALKSCH)))
     adm = sum(1 for a in active if is_admission_confirmed(a))
@@ -518,7 +487,6 @@ def exec_summary(active):
         ("Fresh (New) Leads", (new, pct(new, total))),
         ("Repeat Leads", (fup, pct(fup, total))),
         ("Referral Leads", (ref, pct(ref, total))),
-        ("Fresh (Non-Ref Connected)", (fresh_nonref_conn, pct(fresh_nonref_conn, total))),
         ("Total Lead Interactions", (inter, "")),
         ("Valid Phone Number Leads", (valid, pct(valid, total))),
         ("Invalid Phone Number Leads", (invalid, pct(invalid, total))),
@@ -587,11 +555,9 @@ def source_perf(active):
         ref = sum(1 for a in g if is_referral(a))
         gm = sum(1 for a in g if yes(a.get(C_GMEET)))
         wk = sum(1 for a in g if yes(a.get(C_WALKSCH)))
-        fresh_nrc = count_fresh_nonref_connected(g)   # Fresh (Non-Ref Connected), per source
-        # Order: Source | Total | Unique(Fresh) | Fresh (Non-Ref Connected) | Repeat |
-        #        Interactions | Valid | Relevant | Irrelevant | Referral | GMeet |
-        #        Walk-in | % Contribution
-        rows.append([label, n, fresh, fresh_nrc, repeat, inter, valid, rel, irr, ref, gm, wk,
+        # Order: Source | Total | Unique(Fresh) | Repeat | Interactions | Valid |
+        #        Relevant | Irrelevant | Referral | GMeet | Walk-in | % Contribution
+        rows.append([label, n, fresh, repeat, inter, valid, rel, irr, ref, gm, wk,
                      pct(n, source_total)])
     return rows
 
@@ -620,12 +586,10 @@ def counsellor_perf(active):
         n = len(g)                                       # Total = Fresh + Repeat
         fresh = sum(1 for a in g if a["_is_new"])
         repeat = n - fresh
-        fresh_nrc = count_fresh_nonref_connected(g)      # Fresh (Non-Ref Connected), per counsellor
-        # Order: Counselling By | Total | Unique(Fresh) | Fresh (Non-Ref Connected) |
-        #        Repeat | Interactions | Valid | Relevant | Irrelevant | Referral |
-        #        GMeet | Walk-in | % Contribution
+        # Order: Counselling By | Total | Unique(Fresh) | Repeat | Interactions |
+        #        Valid | Relevant | Irrelevant | Referral | GMeet | Walk-in | % Contribution
         rows.append([
-            disp[key], n, fresh, fresh_nrc, repeat,
+            disp[key], n, fresh, repeat,
             sum(a["_ninper"] for a in g),
             sum(1 for a in g if yes(a.get(C_VALID))),
             sum(1 for a in g if yes(a.get(C_RELEV))),
@@ -761,13 +725,13 @@ def lead_detail_rows(tab, leads):
 
 # Headline exec-summary metrics rendered in bold.
 EXEC_KPI = {"Total Leads (Fresh + Repeat)", "Fresh (New) Leads", "Repeat Leads",
-            "Referral Leads", "Fresh (Non-Ref Connected)"}
+            "Referral Leads"}
 
-SRC_HEADER = ["Source", "Total Leads", "Fresh (New) Leads", "Fresh (Non-Ref Connected)",
-              "Repeat Leads", "Interactions", "Valid", "Relevant", "Irrelevant", "Referral",
+SRC_HEADER = ["Source", "Total Leads", "Fresh (New) Leads", "Repeat Leads",
+              "Interactions", "Valid", "Relevant", "Irrelevant", "Referral",
               "GMeet Sch.", "Walk-in Sch.", "% Contribution"]
-CB_HEADER = ["Counselling By", "Total Leads", "Fresh (New) Leads", "Fresh (Non-Ref Connected)",
-             "Repeat Leads", "Interactions", "Valid", "Relevant", "Irrelevant", "Referral",
+CB_HEADER = ["Counselling By", "Total Leads", "Fresh (New) Leads", "Repeat Leads",
+             "Interactions", "Valid", "Relevant", "Irrelevant", "Referral",
              "GMeet Sch.", "Walk-in Sch.", "% Contribution"]
 
 
@@ -806,12 +770,11 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
     # excluded; Fresh-Relevant counts the Relevant leads among the non-referral
     # fresh ones. Rendered as a colour-run rich-text line (col A, overflow band).
     _SEP = "     |     "
-    fresh_nonref = count_fresh_nonref(active)              # raw Fresh (Non-Ref), unchanged
-    fresh_nonref_conn = count_fresh_nonref_connected(active)   # Fresh (Non-Ref Connected)
-    # Fresh-Relevant (Non-Ref) — UPDATED to the connected value (minus not-connected).
-    fresh_rel_nonref = count_fresh_rel_nonref_connected(active)
-    # Fresh-Relevant % keeps its formula: updated Fresh-Relevant (Non-Ref) over the
-    # RAW Fresh (Non-Ref) denominator (unchanged).
+    fresh_nonref = sum(1 for a in active
+                       if a.get("_is_new") and not is_referral(a))
+    fresh_rel_nonref = sum(1 for a in active
+                           if a.get("_is_new") and not is_referral(a)
+                           and yes(a.get(C_RELEV)))
     rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
     segs = None
 
@@ -822,9 +785,6 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         _fresh_target = fresh_nonref_target()
         fresh_rgb, fresh_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref >= _fresh_target
                                 else (TXT_RED, TXT_RED_HEX))
-        # Fresh (Non-Ref Connected) — same colour rule as Fresh (Non-Ref).
-        fresh_conn_rgb, fresh_conn_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref_conn >= _fresh_target
-                                          else (TXT_RED, TXT_RED_HEX))
         rel_rgb, rel_hex = ((TXT_GREEN, TXT_GREEN_HEX) if rel_pct > 80
                             else (TXT_RED, TXT_RED_HEX))
         _comp_pct, _, _ = lead_completion_pct(active)
@@ -833,11 +793,9 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         segs = [
             ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_nonref), fresh_rgb, fresh_hex),
-            (_SEP + "Fresh (Non-Ref Connected):  ", CLR_SUB_FG, HEX["SUB_FG"]),
-            (str(fresh_nonref_conn), fresh_conn_rgb, fresh_conn_hex),
             (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_rel_nonref), rel_rgb, rel_hex),
-            (_SEP + "Fresh-Relevant %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (f"{rel_pct:.1f}%", rel_rgb, rel_hex),
             (_SEP + "Lead Completion %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (f"{_comp_pct:.1f}%", _comp_rgb, _comp_hex),
@@ -850,14 +808,10 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         last = min(end.date(), now_ist().date())
         ndays = max((last - start.date()).days + 1, 1)
         avg_daily_fresh = fresh_nonref / ndays
-        avg_daily_fresh_conn = fresh_nonref_conn / ndays
         avg_daily_fresh_rel = fresh_rel_nonref / ndays
         _fresh_target = fresh_nonref_target()
         fresh_rgb, fresh_hex = ((TXT_GREEN, TXT_GREEN_HEX) if avg_daily_fresh >= _fresh_target
                                 else (TXT_RED, TXT_RED_HEX))
-        # Fresh (Non-Ref Connected) — same colour rule as Fresh (Non-Ref).
-        fresh_conn_rgb, fresh_conn_hex = ((TXT_GREEN, TXT_GREEN_HEX) if avg_daily_fresh_conn >= _fresh_target
-                                          else (TXT_RED, TXT_RED_HEX))
         rel_rgb, rel_hex = ((TXT_GREEN, TXT_GREEN_HEX) if rel_pct > 80
                             else (TXT_RED, TXT_RED_HEX))
         _comp_pct, _, _ = lead_completion_pct(active)
@@ -866,8 +820,6 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         segs = [
             ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_nonref), fresh_rgb, fresh_hex),
-            (_SEP + "Fresh (Non-Ref Connected):  ", CLR_SUB_FG, HEX["SUB_FG"]),
-            (str(fresh_nonref_conn), fresh_conn_rgb, fresh_conn_hex),
             (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_rel_nonref), rel_rgb, rel_hex),
             (_SEP + "Avg Daily Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
@@ -925,11 +877,9 @@ def _apply_metric_header_line(tab, leads):
     metrics and its OWN Lead Completion %. Lead Completion % is coloured dark green
     (bold) when strictly greater than 90 %, else red (bold)."""
     _SEP = "     |     "
-    fresh_nonref = count_fresh_nonref(leads)                    # raw Fresh (Non-Ref)
-    fresh_nonref_conn = count_fresh_nonref_connected(leads)     # Fresh (Non-Ref Connected)
-    # Fresh-Relevant (Non-Ref) — UPDATED to the connected value (minus not-connected).
-    fresh_rel = count_fresh_rel_nonref_connected(leads)
-    # Fresh-Relevant % keeps its formula: updated Fresh-Relevant over RAW Fresh (Non-Ref).
+    fresh_nonref = sum(1 for a in leads if a.get("_is_new") and not is_referral(a))
+    fresh_rel = sum(1 for a in leads if a.get("_is_new") and not is_referral(a)
+                    and yes(a.get(C_RELEV)))
     rel_pct = (fresh_rel / fresh_nonref * 100.0) if fresh_nonref else 0.0
     comp_pct, _, _ = lead_completion_pct(leads)
     # Fresh — coloured against THIS counsellor's own target (lead_target_per_counsellor
@@ -937,9 +887,6 @@ def _apply_metric_header_line(tab, leads):
     _target = lead_target_per_counsellor()
     fresh_rgb, fresh_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref >= _target
                             else (TXT_RED, TXT_RED_HEX))
-    # Fresh (Non-Ref Connected) — same colour rule as Fresh (against the counsellor target).
-    fresh_conn_rgb, fresh_conn_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref_conn >= _target
-                                      else (TXT_RED, TXT_RED_HEX))
     # Fresh-Relevant count AND its % share one verdict, driven by the % (>= 80 ->
     # green, else red) — same approach as the Summary tab header.
     rel_rgb, rel_hex = ((TXT_GREEN, TXT_GREEN_HEX) if rel_pct >= 80
@@ -949,8 +896,6 @@ def _apply_metric_header_line(tab, leads):
     segs = [
         ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (str(fresh_nonref), fresh_rgb, fresh_hex),
-        (_SEP + "Fresh (Non-Ref Connected):  ", CLR_SUB_FG, HEX["SUB_FG"]),
-        (str(fresh_nonref_conn), fresh_conn_rgb, fresh_conn_hex),
         (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (str(fresh_rel), rel_rgb, rel_hex),
         (_SEP + "Fresh-Relevant %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
@@ -2784,10 +2729,11 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
     # Fresh (Non-Referral) = fresh/new leads excluding referrals; Fresh-Relevant
     # (Non-Referral) = of those, the ones marked Relevant. Referral leads are
     # never counted in either figure.
-    fresh_nonref = count_fresh_nonref(active)                  # raw Fresh (Non-Ref), unchanged
-    fresh_nonref_conn = count_fresh_nonref_connected(active)   # Fresh (Non-Ref Connected)
-    # Fresh-Relevant (Non-Ref) — UPDATED to the connected value (minus not-connected).
-    fresh_rel_nonref = count_fresh_rel_nonref_connected(active)
+    fresh_nonref = sum(1 for a in active
+                       if a.get("_is_new") and not is_referral(a))
+    fresh_rel_nonref = sum(1 for a in active
+                           if a.get("_is_new") and not is_referral(a)
+                           and yes(a.get(C_RELEV)))
 
     # Weekly/Monthly also show per-day averages of those two figures, and colour-
     # code all four: the two Fresh figures share the Avg-Daily-Fresh vs expected-
@@ -2797,16 +2743,12 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
         last = min(end.date(), now_ist().date())
         ndays = max((last - start.date()).days + 1, 1)
         avg_daily_fresh = fresh_nonref / ndays
-        avg_daily_fresh_conn = fresh_nonref_conn / ndays
         avg_daily_fresh_rel = fresh_rel_nonref / ndays
-        # Fresh-Relevant % keeps its formula: updated Fresh-Relevant over RAW Fresh (Non-Ref).
         avg_rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
         fresh_hex = TXT_GREEN_HEX if avg_daily_fresh >= fresh_nonref_target() else TXT_RED_HEX
-        fresh_conn_hex = TXT_GREEN_HEX if avg_daily_fresh_conn >= fresh_nonref_target() else TXT_RED_HEX
         rel_hex = TXT_GREEN_HEX if avg_rel_pct > 80 else TXT_RED_HEX
         kpis2 = [
             ("Fresh (Non-Ref)", fresh_nonref, fresh_hex),
-            ("Fresh (Non-Ref Connected)", fresh_nonref_conn, fresh_conn_hex),
             ("Fresh-Relevant (Non-Ref)", fresh_rel_nonref, rel_hex),
             # Fresh-Relevant % — same value/colour as the Summary tab header's 3rd
             # metric (Fresh-Relevant %: XX.X%), coloured by the > 80 verdict (rel_hex).
@@ -2820,13 +2762,10 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
         # coded directly — Fresh (Non-Referral) green when the count >= the dynamic
         # expected target; Fresh-Relevant (Non-Referral) green when its % of that
         # count > 80.
-        # Fresh-Relevant % keeps its formula: updated Fresh-Relevant over RAW Fresh (Non-Ref).
         rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
         fresh_hex = TXT_GREEN_HEX if fresh_nonref >= fresh_nonref_target() else TXT_RED_HEX
-        fresh_conn_hex = TXT_GREEN_HEX if fresh_nonref_conn >= fresh_nonref_target() else TXT_RED_HEX
         rel_hex = TXT_GREEN_HEX if rel_pct > 80 else TXT_RED_HEX
         kpis2 = [("Fresh (Non-Ref)", fresh_nonref, fresh_hex),
-                 ("Fresh (Non-Ref Connected)", fresh_nonref_conn, fresh_conn_hex),
                  ("Fresh-Relevant (Non-Ref)", fresh_rel_nonref, rel_hex),
                  # Fresh-Relevant % — same value/colour as the Summary tab header's
                  # 3rd metric (Fresh-Relevant %: XX.X%), coloured by the > 80 verdict.
