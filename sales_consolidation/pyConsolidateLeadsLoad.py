@@ -801,6 +801,20 @@ def std_status(value):
     return canon.get(low, s)
 
 
+# Admission Status consolidation priority: when the SAME lead appears in several
+# records with different Admission Status values, "Not Interested" outranks every
+# other value. Normalisation (case / spacing / emoji / formatting) is handled by
+# std_status, so "not interested", "NOT INTERESTED", " Not  Interested " all match.
+_ADMISSION_PRIORITY_VALUE = "Not Interested"
+
+
+def records_have_not_interested(records):
+    """True if ANY of the lead's source records carries Admission Status
+    "Not Interested" (compared after std_status normalisation)."""
+    return any(std_status(r.get("Admission Status", "")) == _ADMISSION_PRIORITY_VALUE
+               for r in records)
+
+
 # ---------------------------------------------------------------------------
 # 4. DATE PARSING / FORMATTING
 # ---------------------------------------------------------------------------
@@ -1757,6 +1771,16 @@ def merge_cluster(records):
     _wa_web_only = _is_web_whatsapp_only(row.get("Platforms Used", ""))
     _unable_to_connect = clean_text(row.get("Admission Status", "")).lower() == "unable to connect"
     row[WHATSAPP_WEB_CONNECT_FIELD] = "No" if (_wa_web_only and _unable_to_connect) else "Yes"
+
+    # Admission Status priority override (additional check on top of the existing
+    # merge). When the same lead spans multiple records with differing Admission
+    # Status values, "Not Interested" has the HIGHEST priority and becomes the
+    # consolidated value. Applied LAST so it wins over every other Admission Status
+    # value (including the earlier merge result and the Irrelevant rule) and does
+    # not disturb any logic above that reads the merged Admission Status. Comparison
+    # is normalised for case/spacing/formatting; example lead numbers are not hard-coded.
+    if records_have_not_interested(records):
+        row["Admission Status"] = _ADMISSION_PRIORITY_VALUE
 
     return row
 
