@@ -89,6 +89,14 @@ LEAD_TYPE_MAP_SHEET_ID = os.environ.get(
     "INTELLIBI_LEAD_TYPE_MAP_SHEET_ID", "1b7KbkJ3a8QvL2RVDyEgNdcduzGBbZ0_bsY-gZGK0UMo")
 LEAD_TYPE_UNIDENTIFIED = "Unidentified"
 
+# Course Interested In Mapping sheet — column-wise: Row 1 of each column is the
+# FINAL expected "Which technology are you interested in learning?" value, and the
+# cells below it (Row 2 onward) are the source/alternate values that map to it.
+# Read LIVE every run so editing the sheet updates the mapping with no code change.
+# The sheet must be shared with the service account (Viewer).
+COURSE_INTEREST_MAP_SHEET_ID = os.environ.get(
+    "INTELLIBI_COURSE_INTEREST_MAP_SHEET_ID", "1myO4SXRGAHx2NRG4U0ilFwOhh6yBvbSdzVTOAkMJ2WU")
+
 # Company / virtual (Exotel) phone lines that must NEVER be treated as leads.
 # These are auto-augmented at runtime with every distinct 'To' business line
 # seen in the calling log. Add any further office/test numbers here.
@@ -1575,13 +1583,74 @@ for _std, _srcs in _COURSE_STD.items():
         _COURSE_LOOKUP[_course_key(_sv)] = _std
 
 
+# ── Course Interested In Mapping sheet (dynamic, live every run) ──────────────
+# Column-wise: Row 1 of each column is the FINAL expected value; Row 2 onward are
+# the source/alternate values that map to it. Built as {course_key(alias) -> final
+# value} using the SAME normalisation (_course_key) as the existing logic, so case,
+# spacing and formatting differences don't affect matching. Left-most column wins
+# on a tie. Read once per run and cached; on any failure the map is empty and the
+# existing logic is used unchanged.
+def load_course_interest_map():
+    """Return {normalised alias -> Row-1 final value} from the Course Interested In
+    Mapping sheet. Empty on any read failure (existing logic then applies)."""
+    out = {}
+    try:
+        df = _read_gsheet_df(COURSE_INTEREST_MAP_SHEET_ID)
+    except Exception as e:
+        print(f"  [Course Map] WARN could not read mapping sheet "
+              f"{COURSE_INTEREST_MAP_SHEET_ID}: {e}\n"
+              f"             -> existing course logic will be used. Share the sheet "
+              f"with the service account to enable this mapping.")
+        return out
+    if df is None or getattr(df, "empty", True):
+        print("  [Course Map] WARN mapping sheet is empty — existing course logic "
+              "will be used.")
+        return out
+    for col in df.columns:
+        final_value = clean_text(col)                    # Row 1 = final expected value
+        # Skip blank / placeholder headers ('col_N' is emitted for empty Row-1 cells).
+        if not final_value or re.fullmatch(r"col_\d+", final_value):
+            continue
+        # The Row-1 value itself also maps to itself (a value already equal to the
+        # final name stays the final name).
+        out.setdefault(_course_key(final_value), final_value)
+        for cell in df[col].tolist():                    # Row 2 onward = alternates
+            key = _course_key(clean_text(cell))
+            if key:
+                out.setdefault(key, final_value)         # first (left-most) column wins ties
+    _ncols = sum(1 for c in df.columns
+                 if clean_text(c) and not re.fullmatch(r"col_\d+", clean_text(c)))
+    print(f"  [Course Map] loaded {len(out)} value(s) across {_ncols} technolog(y/ies)")
+    return out
+
+
+_COURSE_INTEREST_MAP = None        # lazy singleton: {normalised alias -> final value}
+
+
+def _course_interest_map():
+    global _COURSE_INTEREST_MAP
+    if _COURSE_INTEREST_MAP is None:
+        _COURSE_INTEREST_MAP = load_course_interest_map()
+    return _COURSE_INTEREST_MAP
+
+
 def normalize_course_interest(value):
     """Map a raw course-interest value to its approved standard name. Unlisted
-    values are returned cleaned but unchanged; blanks stay blank."""
+    values are returned cleaned but unchanged; blanks stay blank.
+
+    Additional check (added on top of the existing logic): the value is first
+    compared against the live Course Interested In Mapping sheet — if it matches
+    any Row-2-onward alias (or a Row-1 value) in any column, the column's Row-1
+    final value is used. If there is no match in the mapping sheet, the existing
+    logic below runs exactly as before."""
     v = clean_text(value)
     if not v:
         return v
-    return _COURSE_LOOKUP.get(_course_key(v), v)
+    key = _course_key(v)
+    mapped = _course_interest_map().get(key)             # NEW: dynamic sheet mapping
+    if mapped:
+        return mapped
+    return _COURSE_LOOKUP.get(key, v)                     # existing logic, unchanged
 
 
 # Columns whose consolidated value is OVERWRITTEN by the customer's latest
