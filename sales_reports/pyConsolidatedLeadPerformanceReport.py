@@ -54,13 +54,13 @@ def now_ist():
 # REPORT GENERATION CONFIGURATION
 # ============================================================
 GENERATE_DAILY_REPORT   = False
-GENERATE_WEEKLY_REPORT   = True
+GENERATE_WEEKLY_REPORT   = False
 GENERATE_MONTHLY_REPORT  = True
 
 # Optional manual report periods (leave as None to use the defaults below).
-DAILY_REPORT_DATE            = "2026-09-10"      ## e.g. "2026-09-01"
-WEEKLY_REPORT_REFERENCE_DATE = "2026-09-05"       # e.g. "2026-07-30" (any day in the wanted week)
-MONTHLY_REPORT_MONTH         = 8      # e.g. 7   (1-12)
+DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
+WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
+MONTHLY_REPORT_MONTH         = 8 #None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
 
 # ── Scheduled-run report selection (scheduler only) ──────────────────────────
@@ -2957,13 +2957,17 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
     fresh_quality = [("Lead Target", _lead_target, NAVY_HEX),
                      ("Fresh", fresh_nonref, fresh_hex),
                      ("Fresh<br>Connected", fresh_nonref_conn, fresh_conn_hex),
-                     ("Fresh-<br>Relevant", fresh_rel_nonref, rel_hex),
-                     ("Fresh-<br>Relevant %", f"{rel_pct:.0f}%", rel_hex)]
+                     ("Fresh-<br>Relevant", fresh_rel_nonref, rel_hex)]
+    # Fresh-Relevant % — shown here ONLY for Daily. For Weekly/Monthly the same
+    # figure already appears in the Daily Averages block, so it's omitted here.
+    if not is_wm:
+        fresh_quality.append(("Fresh-<br>Relevant %", f"{rel_pct:.0f}%", rel_hex))
     body_sections = (_sec("Lead Volume") + _card_block(lead_volume, 4)
-                     + _sec("Fresh Quality (Non-Ref)") + _card_block(fresh_quality, 5))
+                     + _sec("Fresh Quality (Non-Ref)")
+                     + _card_block(fresh_quality, len(fresh_quality)))
     if is_wm:
-        daily_avg = [("Avg Fresh<br>/ day", f"{avg_daily_fresh:.1f}", fresh_hex),
-                     ("Avg Fresh-Relevant<br>/ day", f"{avg_daily_fresh_rel:.1f}", fresh_hex),
+        daily_avg = [("Avg Fresh", f"{avg_daily_fresh:.1f}", fresh_hex),
+                     ("Avg Fresh-Relevant", f"{avg_daily_fresh_rel:.1f}", fresh_hex),
                      ("Avg Fresh-<br>Relevant %", f"{rel_pct:.0f}%", rel_hex)]
         body_sections += _sec("Daily Averages") + _card_block(daily_avg, 3)
 
