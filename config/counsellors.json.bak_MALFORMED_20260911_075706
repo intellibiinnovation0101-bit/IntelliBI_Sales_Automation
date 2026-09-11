@@ -6,8 +6,8 @@
       "counsellor_name": "Harish Rathod",
       "rank": 1,
       "office_number": "9022344821",
-      "date_of_joining": "17-Sep-2025",
-      "last_date_of_employment": "",
+	  "date_of_joining":"17-Sep-2025"
+	  "last_date_of_employment":
       "current_status": "Active"
     },
     {
@@ -15,8 +15,8 @@
       "counsellor_name": "Akash Sahu",
       "rank": 2,
       "office_number": "7387028359",
-      "date_of_joining": "21-Aug-2026",
-      "last_date_of_employment": "",
+	  "date_of_joining":"21-Aug-2026"
+	  "last_date_of_employment":
       "current_status": "Active"
     },
     {
@@ -24,17 +24,17 @@
       "counsellor_name": "ArshKhan Pathan",
       "rank": 3,
       "office_number": "8484989915",
-      "date_of_joining": "21-Jul-2026",
-      "last_date_of_employment": "",
+	  "date_of_joining":"21-Jul-2026"
+	  "last_date_of_employment":
       "current_status": "Active"
     },
-    {
+	{
       "counsellor_id": "C004",
       "counsellor_name": "ArshKhan Pathan",
       "rank": 3,
       "office_number": "9999999999",
-      "date_of_joining": "10-Sep-2026",
-      "last_date_of_employment": "",
+	  "date_of_joining":"10-Sep-2026"
+	  "last_date_of_employment":
       "current_status": "Active"
     }
   ]

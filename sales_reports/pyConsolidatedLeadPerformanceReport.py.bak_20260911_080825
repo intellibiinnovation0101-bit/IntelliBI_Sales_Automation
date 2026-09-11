@@ -54,13 +54,13 @@ def now_ist():
 # REPORT GENERATION CONFIGURATION
 # ============================================================
 GENERATE_DAILY_REPORT   = False
-GENERATE_WEEKLY_REPORT   = True
+GENERATE_WEEKLY_REPORT   = False
 GENERATE_MONTHLY_REPORT  = True
 
 # Optional manual report periods (leave as None to use the defaults below).
-DAILY_REPORT_DATE            = "2026-09-10"      ## e.g. "2026-09-01"
-WEEKLY_REPORT_REFERENCE_DATE = "2026-09-05"       # e.g. "2026-07-30" (any day in the wanted week)
-MONTHLY_REPORT_MONTH         = 8      # e.g. 7   (1-12)
+DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
+WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
+MONTHLY_REPORT_MONTH         = 8 #None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
 
 # ── Scheduled-run report selection (scheduler only) ──────────────────────────
@@ -820,7 +820,7 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         # Daily: colour Fresh by its count vs the dynamic expected target
         # (>= expected -> green, else red); the Fresh-Relevant count and % by
         # that % > 80.
-        _fresh_target = lead_target_for_period(start, end)
+        _fresh_target = fresh_nonref_target(start, end)
         fresh_rgb, fresh_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref >= _fresh_target
                                 else (TXT_RED, TXT_RED_HEX))
         # Fresh (Non-Ref Connected) — same colour rule as Fresh (Non-Ref).
@@ -853,12 +853,11 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         avg_daily_fresh = fresh_nonref / ndays
         avg_daily_fresh_conn = fresh_nonref_conn / ndays
         avg_daily_fresh_rel = fresh_rel_nonref / ndays
-        _fresh_target = lead_target_for_period(start, end)
-        # Colour Fresh vs the PERIOD Lead Target (period total >= period target).
-        fresh_rgb, fresh_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref >= _fresh_target
+        _fresh_target = fresh_nonref_target(start, end)
+        fresh_rgb, fresh_hex = ((TXT_GREEN, TXT_GREEN_HEX) if avg_daily_fresh >= _fresh_target
                                 else (TXT_RED, TXT_RED_HEX))
         # Fresh (Non-Ref Connected) — same colour rule as Fresh (Non-Ref).
-        fresh_conn_rgb, fresh_conn_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref_conn >= _fresh_target
+        fresh_conn_rgb, fresh_conn_hex = ((TXT_GREEN, TXT_GREEN_HEX) if avg_daily_fresh_conn >= _fresh_target
                                           else (TXT_RED, TXT_RED_HEX))
         rel_rgb, rel_hex = ((TXT_GREEN, TXT_GREEN_HEX) if rel_pct > 80
                             else (TXT_RED, TXT_RED_HEX))
@@ -927,7 +926,7 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
     return t
 
 
-def _apply_metric_header_line(tab, leads, start=None, end=None):
+def _apply_metric_header_line(tab, leads):
     """Inject the 'Fresh | Fresh-Relevant | Fresh-Relevant % | Lead Completion %'
     metric line into the tab's (blank) second header row — same colour-run style as
     the Summary tab. Used by each individual counsellor tab so it carries its OWN
@@ -941,9 +940,9 @@ def _apply_metric_header_line(tab, leads, start=None, end=None):
     # Fresh-Relevant % keeps its formula: updated Fresh-Relevant over RAW Fresh (Non-Ref).
     rel_pct = (fresh_rel / fresh_nonref * 100.0) if fresh_nonref else 0.0
     comp_pct, _, _ = lead_completion_pct(leads)
-    # Fresh — coloured against THIS counsellor's PERIOD target (per-counsellor daily
-    # target × elapsed days in the report period): >= target -> green, else red.
-    _target = lead_target_per_counsellor_period(start, end)
+    # Fresh — coloured against THIS counsellor's own target (lead_target_per_counsellor
+    # from counsellors.json): >= target -> green, else red.
+    _target = lead_target_per_counsellor()
     fresh_rgb, fresh_hex = ((TXT_GREEN, TXT_GREEN_HEX) if fresh_nonref >= _target
                             else (TXT_RED, TXT_RED_HEX))
     # Fresh (Non-Ref Connected) — same colour rule as Fresh (against the counsellor target).
@@ -1070,58 +1069,6 @@ def fresh_nonref_target(start=None, end=None):
     return expected if expected > 0 else _FRESH_TARGET_FALLBACK
 
 
-def _counsellors_on_day(counsellors, d):
-    """Number of counsellors employed on calendar date d (date_of_joining <= d and,
-    unless last_date_of_employment is blank/open, last_date_of_employment >= d)."""
-    n = 0
-    for c in counsellors:
-        doj = parse_dt(c.get("date_of_joining", ""))
-        lde = parse_dt(c.get("last_date_of_employment", ""))
-        if doj is not None and doj.date() > d:
-            continue
-        if lde is not None and lde.date() < d:
-            continue
-        n += 1
-    return n
-
-
-def period_days(start=None, end=None):
-    """ELAPSED days in the report period: period start .. min(end, today). For a
-    historical period this is the whole period; for the current (in-progress) period
-    it is the days so far, so a partial week/month is compared fairly. 1 if no period."""
-    if start is None or end is None:
-        return 1
-    last = min(end.date(), now_ist().date())
-    return max((last - start.date()).days + 1, 1)
-
-
-def lead_target_for_period(start=None, end=None):
-    """TOTAL Lead Target for the whole report period (not a single day):
-        sum over each ELAPSED day d in the period of
-            lead_target_per_counsellor × (counsellors employed on day d)
-    so Weekly/Monthly targets scale to the period and stay historical-aware (mid-period
-    joins/leaves and the current partial period are handled day by day). Daily naturally
-    yields the single-day target. Falls back to today's active roster × target when no
-    period is given, and to the legacy threshold if the config is unreadable / non-positive."""
-    try:
-        with open(_COUNSELLORS_JSON, encoding="utf-8") as f:
-            cfg = json.load(f) or {}
-        per = int(cfg.get("lead_target_per_counsellor", 0))
-        counsellors = cfg.get("counsellors", [])
-    except Exception:
-        return _FRESH_TARGET_FALLBACK
-    if start is None or end is None:
-        active = sum(1 for c in counsellors
-                     if str(c.get("current_status", "")).strip().lower() == "active")
-        return (per * active) or _FRESH_TARGET_FALLBACK
-    last = min(end.date(), now_ist().date())
-    d, total = start.date(), 0
-    while d <= last:
-        total += per * _counsellors_on_day(counsellors, d)
-        d += timedelta(days=1)
-    return total if total > 0 else _FRESH_TARGET_FALLBACK
-
-
 def lead_target_per_counsellor():
     """The PER-counsellor Fresh target = lead_target_per_counsellor read LIVE from
     config/counsellors.json (NOT multiplied by the counsellor count). Used to
@@ -1133,14 +1080,6 @@ def lead_target_per_counsellor():
         return target if target > 0 else _FRESH_TARGET_FALLBACK
     except Exception:
         return _FRESH_TARGET_FALLBACK
-
-
-def lead_target_per_counsellor_period(start=None, end=None):
-    """PER-counsellor Lead Target for the whole report period = the per-counsellor daily
-    target × elapsed days in the period. Used to colour the Fresh figure on each
-    individual counsellor tab (so a weekly/monthly counsellor tab is judged against a
-    weekly/monthly target, not a single day)."""
-    return lead_target_per_counsellor() * period_days(start, end)
 # How many columns the day-wise header colour band spans. The full single-line
 # header (and the combined average line) lives in column A and OVERFLOWS across
 # this many empty, same-coloured cells, so a long header shows in full on one
@@ -1861,7 +1800,7 @@ def build_report(period_label, period_range, df, start, end):
             tname = sanitize_tab_name("CB - " + cb + " ")
         tb = Tab(tname)
         add_report_header(tb, f"Counsellor: {cb}", period_range, gen_stamp)
-        _apply_metric_header_line(tb, leads, start, end)   # per-counsellor metrics + Lead Completion %
+        _apply_metric_header_line(tb, leads)       # per-counsellor metrics + Lead Completion %
         add_exec_summary(tb, leads)
         # Lead Source Performance for THIS counsellor's leads — same structure and
         # logic as the main Summary tab (source_perf + SRC_HEADER), scoped to the
@@ -2876,105 +2815,120 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
     a named call-to-action link, and the IntelliBI signature."""
     es = exec_summary(active)
 
+    # Display names for the four second-row metric cards — rendered on multiple
+    # lines so they read cleanly and all four blocks line up. Metric 1 gets a blank
+    # spacer line (&nbsp;) so every block is the same 3-line height and stays aligned
+    # with the others. Display-only: the values, colours and calculations are unchanged.
+    _LBL_FRESH        = "Fresh<br>Non-Ref<br>&nbsp;"
+    _LBL_FRESH_CONN   = "Fresh<br>Non-Ref<br>Connected"
+    _LBL_FRESHREL     = "Fresh-Relevant<br>Non-Ref<br>Connected"
+    _LBL_FRESHREL_PCT = "Fresh-Relevant %<br>Non-Ref<br>Connected"
+
     def val(metric):
         v = es.get(metric)
         return v[0] if v else 0
 
-    # ---- Values (calculations unchanged) --------------------------------------
-    # Lead Target is the PERIOD target (weekly/monthly = whole-period, historical-aware;
-    # daily = single day). The Fresh figures are coloured against it.
-    _lead_target = lead_target_for_period(start, end)
-    fresh_nonref = count_fresh_nonref(active)                  # raw Fresh (Non-Ref)
-    fresh_nonref_conn = count_fresh_nonref_connected(active)   # Fresh (Non-Ref) Connected
-    fresh_rel_nonref = count_fresh_rel_nonref_connected(active)  # Fresh-Relevant (connected)
-    rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
+    # Lead Target for THIS report period = lead_target_per_counsellor × applicable
+    # counsellors (employed during the period; historical-aware). Shown as the FIRST
+    # email metric and reused for the Fresh colour logic below.
+    _lead_target = fresh_nonref_target(start, end)
+    kpis = [("Lead Target", _lead_target, NAVY_HEX),
+            ("Total Leads", val("Total Leads (Fresh + Repeat)"), NAVY_HEX),
+            ("Fresh (New)", val("Fresh (New) Leads"), NAVY_HEX),
+            ("Repeat", val("Repeat Leads"), NAVY_HEX),
+            ("Referral", val("Referral Leads"), NAVY_HEX)]
+    # Fresh (Non-Referral) = fresh/new leads excluding referrals; Fresh-Relevant
+    # (Non-Referral) = of those, the ones marked Relevant. Referral leads are
+    # never counted in either figure.
+    fresh_nonref = count_fresh_nonref(active)                  # raw Fresh (Non-Ref), unchanged
+    fresh_nonref_conn = count_fresh_nonref_connected(active)   # Fresh (Non-Ref Connected)
+    # Fresh-Relevant (Non-Ref) — UPDATED to the connected value (minus not-connected).
+    fresh_rel_nonref = count_fresh_rel_nonref_connected(active)
+
+    # Weekly/Monthly also show per-day averages of those two figures, and colour-
+    # code all four: the two Fresh figures share the Avg-Daily-Fresh vs expected-
+    # target verdict (>= expected -> green/red); the two Relevant figures share the
+    # Avg-Relevant-% > 80 verdict.
+    if report_type in ("Weekly", "Monthly") and start is not None and end is not None:
+        last = min(end.date(), now_ist().date())
+        ndays = max((last - start.date()).days + 1, 1)
+        avg_daily_fresh = fresh_nonref / ndays
+        avg_daily_fresh_conn = fresh_nonref_conn / ndays
+        avg_daily_fresh_rel = fresh_rel_nonref / ndays
+        # Fresh-Relevant % keeps its formula: updated Fresh-Relevant over RAW Fresh (Non-Ref).
+        avg_rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
+        fresh_hex = TXT_GREEN_HEX if avg_daily_fresh >= _lead_target else TXT_RED_HEX
+        fresh_conn_hex = TXT_GREEN_HEX if avg_daily_fresh_conn >= _lead_target else TXT_RED_HEX
+        rel_hex = TXT_GREEN_HEX if avg_rel_pct > 80 else TXT_RED_HEX
+        kpis2 = [
+            (_LBL_FRESH, fresh_nonref, fresh_hex),
+            (_LBL_FRESH_CONN, fresh_nonref_conn, fresh_conn_hex),
+            (_LBL_FRESHREL, fresh_rel_nonref, rel_hex),
+            # Fresh-Relevant % — same value/colour as the Summary tab header's 3rd
+            # metric (Fresh-Relevant %: XX.X%), coloured by the > 80 verdict (rel_hex).
+            (_LBL_FRESHREL_PCT, f"{avg_rel_pct:.1f}%", rel_hex),
+            ("Avg Daily Fresh (Non-Referral)", f"{avg_daily_fresh:.2f}", fresh_hex),
+            ("Avg Daily Fresh-Relevant (Non-Referral)", f"{avg_daily_fresh_rel:.2f}", fresh_hex),
+            ("Avg Daily Fresh-Relevant (Non-Referral)", f"{avg_rel_pct:.1f}%", rel_hex),
+        ]
+    else:
+        # Daily (single day): the two counts only (no per-day average), colour-
+        # coded directly — Fresh (Non-Referral) green when the count >= the dynamic
+        # expected target; Fresh-Relevant (Non-Referral) green when its % of that
+        # count > 80.
+        # Fresh-Relevant % keeps its formula: updated Fresh-Relevant over RAW Fresh (Non-Ref).
+        rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
+        fresh_hex = TXT_GREEN_HEX if fresh_nonref >= _lead_target else TXT_RED_HEX
+        fresh_conn_hex = TXT_GREEN_HEX if fresh_nonref_conn >= _lead_target else TXT_RED_HEX
+        rel_hex = TXT_GREEN_HEX if rel_pct > 80 else TXT_RED_HEX
+        kpis2 = [(_LBL_FRESH, fresh_nonref, fresh_hex),
+                 (_LBL_FRESH_CONN, fresh_nonref_conn, fresh_conn_hex),
+                 (_LBL_FRESHREL, fresh_rel_nonref, rel_hex),
+                 # Fresh-Relevant % — same value/colour as the Summary tab header's
+                 # 3rd metric (Fresh-Relevant %: XX.X%), coloured by the > 80 verdict.
+                 (_LBL_FRESHREL_PCT, f"{rel_pct:.1f}%", rel_hex)]
+
+    # Lead Completion % — kept on its OWN line (a separate card row, below the
+    # Fresh/Fresh-Relevant metrics), colour-coded like the report header:
+    # strictly > 90 % is green, otherwise red. Same figure/logic as the Summary
+    # tab (Completed leads / all leads for this report).
     _comp_pct, _, _ = lead_completion_pct(active)
+    _comp_hex = TXT_GREEN_HEX if _comp_pct > 90 else TXT_RED_HEX
+    kpis3 = [("Lead Completion %", f"{_comp_pct:.1f}%", _comp_hex)]
 
-    is_wm = report_type in ("Weekly", "Monthly") and start is not None and end is not None
-    if is_wm:
-        nd = period_days(start, end)
-        avg_daily_fresh = fresh_nonref / nd
-        avg_daily_fresh_rel = fresh_rel_nonref / nd
-
-    # ---- Colours (Fresh vs the PERIOD Lead Target; % vs 80 / 90) ---------------
-    fresh_hex      = TXT_GREEN_HEX if fresh_nonref >= _lead_target else TXT_RED_HEX
-    fresh_conn_hex = TXT_GREEN_HEX if fresh_nonref_conn >= _lead_target else TXT_RED_HEX
-    rel_hex        = TXT_GREEN_HEX if rel_pct > 80 else TXT_RED_HEX
-    comp_hex       = TXT_GREEN_HEX if _comp_pct > 90 else TXT_RED_HEX
-
-    # ---- Card / section / bar helpers -----------------------------------------
     def _cards(items):
         return "".join(
             "<td style='padding:6px;vertical-align:top'>"
             "<div style='background:#f4f8fd;border:1px solid #e2e8f0;border-radius:8px;"
-            "padding:14px 8px;text-align:center'>"
-            f"<div style='font-size:23px;font-weight:700;color:#{color}'>{v}</div>"
-            f"<div style='font-size:11.5px;color:#5b6b86;margin-top:4px;line-height:1.35'>{lbl}</div>"
+            "padding:14px 10px;text-align:center'>"
+            f"<div style='font-size:24px;font-weight:700;color:#{color}'>{v}</div>"
+            f"<div style='font-size:12px;color:#5b6b86;margin-top:4px;line-height:1.4'>{lbl}</div>"
             "</div></td>"
             for lbl, v, color in items)
-
-    def _card_block(items, per_row):
-        """Render items as full-width rows of at most per_row cards; the last row is
-        padded with empty cells so card widths stay aligned in a grid."""
+    def _card_block(items, per_row, bottom):
+        """Render items as one or more full-width table rows of at most per_row cards
+        each, so a long metric group wraps onto multiple lines instead of crowding one
+        line. The last row is padded with empty cells so card widths stay aligned in a
+        grid across the wrapped rows."""
         if not items:
             return ""
-        out = []
+        blocks = []
         for i in range(0, len(items), per_row):
             chunk = list(items[i:i + per_row])
             cells = _cards(chunk) + "<td style='padding:6px'></td>" * (per_row - len(chunk))
-            out.append("<table role=\"presentation\" width=\"100%\" style=\"border-collapse:"
-                       "separate;margin:0 -6px 4px\"><tr>" + cells + "</tr></table>")
-        return "".join(out)
+            blocks.append(
+                "<table role=\"presentation\" width=\"100%\" style=\"border-collapse:"
+                f"separate;margin:0 -6px {bottom}\"><tr>{cells}</tr></table>")
+        return "".join(blocks)
 
-    def _sec(title):
-        return ("<div style='font-size:11px;font-weight:700;letter-spacing:.06em;"
-                "text-transform:uppercase;color:#5b6b86;margin:18px 0 8px;padding-bottom:5px;"
-                f"border-bottom:1px solid #e2e8f0'>{title}</div>")
-
-    def _bar(name, value_label, pct, hexc, goal_pct, note):
-        pct = max(0, min(100, pct))
-        goal = (f"<div style='position:absolute;top:-2px;bottom:-2px;left:{goal_pct:.0f}%;"
-                "width:2px;background:#33415580'></div>") if goal_pct else ""
-        return (
-            "<div style='margin:11px 0'>"
-            "<table role='presentation' width='100%' style='border-collapse:collapse'><tr>"
-            f"<td style='font-size:13px;color:#1a2a48'>{name}</td>"
-            f"<td style='font-size:13px;font-weight:700;color:#{hexc};text-align:right'>{value_label}</td>"
-            "</tr></table>"
-            "<div style='height:12px;border-radius:999px;background:#eef1f6;position:relative;"
-            "overflow:hidden;margin-top:5px'>"
-            f"<div style='height:100%;border-radius:999px;background:#{hexc};width:{pct:.0f}%'></div>"
-            f"{goal}</div>"
-            f"<div style='font-size:10.5px;color:#5b6b86;margin-top:3px'>{note}</div></div>")
-
-    # ---- Sections (Option A) ---------------------------------------------------
-    lead_volume = [("Total Leads", val("Total Leads (Fresh + Repeat)"), NAVY_HEX),
-                   ("Fresh (New)", val("Fresh (New) Leads"), NAVY_HEX),
-                   ("Repeat", val("Repeat Leads"), NAVY_HEX),
-                   ("Referral", val("Referral Leads"), NAVY_HEX)]
-    # Lead Target is the FIRST metric under Fresh Quality; "Non-Ref" lives in the
-    # section heading, so the count is simply "Fresh".
-    fresh_quality = [("Lead Target", _lead_target, NAVY_HEX),
-                     ("Fresh", fresh_nonref, fresh_hex),
-                     ("Fresh<br>Connected", fresh_nonref_conn, fresh_conn_hex),
-                     ("Fresh-<br>Relevant", fresh_rel_nonref, rel_hex),
-                     ("Fresh-<br>Relevant %", f"{rel_pct:.0f}%", rel_hex)]
-    body_sections = (_sec("Lead Volume") + _card_block(lead_volume, 4)
-                     + _sec("Fresh Quality (Non-Ref)") + _card_block(fresh_quality, 5))
-    if is_wm:
-        daily_avg = [("Avg Fresh<br>/ day", f"{avg_daily_fresh:.1f}", fresh_hex),
-                     ("Avg Fresh-Relevant<br>/ day", f"{avg_daily_fresh_rel:.1f}", fresh_hex),
-                     ("Avg Fresh-<br>Relevant %", f"{rel_pct:.0f}%", rel_hex)]
-        body_sections += _sec("Daily Averages") + _card_block(daily_avg, 3)
-
-    # ---- Performance vs Goals (bars, from Option C) ---------------------------
-    _tgt = _lead_target if _lead_target else 1
-    bars = (_sec("Performance vs Goals")
-            + _bar("Fresh vs Lead Target", f"{fresh_nonref} / {_lead_target}",
-                   fresh_nonref / _tgt * 100.0, fresh_hex, 100,
-                   "Green when Fresh reaches the period Lead Target")
-            + _bar("Fresh-Relevant %", f"{rel_pct:.0f}%", rel_pct, rel_hex, 80, "Goal: 80%")
-            + _bar("Lead Completion %", f"{_comp_pct:.0f}%", _comp_pct, comp_hex, 90, "Goal: 90%"))
+    # Row 1: headline KPIs (Lead Target + lead totals) on one line. Row 2+: the Fresh
+    # detail metrics wrapped at 4 per line — for Weekly/Monthly this cleanly splits the
+    # period totals (line 1) from the per-day averages (line 2) instead of crowding all
+    # seven onto one line; Daily stays a single line of four. Lead Completion % keeps
+    # its own line. This is layout only — the metric values/colours are unchanged.
+    cards_block  = _card_block(kpis,  max(len(kpis), 1), "10px")   # 5 headline KPIs, one line
+    cards2_block = _card_block(kpis2, 4, "8px")                    # Fresh detail, 4 per line
+    cards3_block = _card_block(kpis3, max(len(kpis3), 1), "20px")  # Lead Completion %, own line
 
     return f"""<html><body style="margin:0;padding:24px;background:#eef2f8;
   font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#1a2a48">
@@ -2984,14 +2938,13 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
       <div style="font-size:20px;font-weight:700">IntelliBI &nbsp;&middot;&nbsp; {report_type} Lead Report</div>
       <div style="font-size:13px;opacity:.85;margin-top:4px">Reporting Period: {period_range}</div>
     </div>
-    <div style="padding:22px 28px">
+    <div style="padding:24px 28px">
       <p style="margin:0 0 14px">Hello Team,</p>
-      <p style="margin:0 0 4px;line-height:1.5">
+      <p style="margin:0 0 18px;line-height:1.5">
         Please find the <b>{report_type}</b> lead-performance report for
         <b>{period_range}</b>. Here is a quick snapshot:</p>
-      {body_sections}
-      {bars}
-      <p style="margin:20px 0 22px;line-height:1.5">The full report covers lead-source
+      {cards_block}{cards2_block}{cards3_block}
+      <p style="margin:0 0 22px;line-height:1.5">The full report covers lead-source
         &amp; counsellor performance, fresh vs. repeat leads, and each lead's complete
         journey from first enquiry to the latest interaction.</p>
       <p style="text-align:center;margin:0 0 24px">
