@@ -58,7 +58,7 @@ GENERATE_WEEKLY_REPORT   = False
 GENERATE_MONTHLY_REPORT  = False
 
 # Optional manual report periods (leave as None to use the defaults below).
-DAILY_REPORT_DATE            = "2026-09-09"      ## e.g. "2026-09-01"
+DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
 MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
@@ -167,6 +167,7 @@ C_COURSE_ADV = "Course Advised"
 C_STATUS  = "Lead Status"
 C_ADM     = "Admission Status"
 C_BACKOUT = "Backout Reason"
+C_REMARKS = "Remarks"                    # shown as the "Notes / Remarks" detail column
 C_COUNSEL = "Counselling By"
 C_GMEET   = "IsGoogleMeetSchedule"
 C_WALKSCH = "IsWalkInSchedule"
@@ -518,7 +519,7 @@ def exec_summary(active):
         ("Fresh (New) Leads", (new, pct(new, total))),
         ("Repeat Leads", (fup, pct(fup, total))),
         ("Referral Leads", (ref, pct(ref, total))),
-        ("Fresh (Non-Ref Connected)", (fresh_nonref_conn, pct(fresh_nonref_conn, total))),
+        ("Fresh Connected", (fresh_nonref_conn, pct(fresh_nonref_conn, total))),
         ("Total Lead Interactions", (inter, "")),
         ("Valid Phone Number Leads", (valid, pct(valid, total))),
         ("Invalid Phone Number Leads", (invalid, pct(invalid, total))),
@@ -655,8 +656,8 @@ LEAD_COLS = [C_FIRST, C_LATEST, C_NAME, C_MOBILE, C_EMAIL, C_PLAT, "_ninper",
              C_STATUS, C_ADM, C_BACKOUT, C_COUNSEL, C_GMEET, C_WALKSCH]
 LEAD_HEADERS = ["First Enquiry", "Latest Enquiry", "Full Name", "Mobile Number",
                 "Platforms Used", "Interactions",
-                "Phone Valid", "Relevant", "Is Referral", "Referrer's Name",
-                "Course Interested", "Lead Status", "Admission Status",
+                "Relevant", "Is Referral",
+                "Course Interested", "Notes / Remarks", "Admission Status",
                 "Backout Reason", "Counselling By", "Google Meet Sch.", "Walk-in Sch.",
                 "Lead Journey (Enquiry → Latest)", "Lead Information Status"]
 
@@ -746,8 +747,8 @@ def lead_detail_rows(tab, leads):
         tab.row([
             a.get(C_FIRST), a.get(C_LATEST), a.get(C_NAME), a.get(C_MOBILE),
             plats, a["_ninper"],
-            a.get(C_VALID), a.get(C_RELEV), a.get(C_REF), a.get(C_REFNAME),
-            a.get(C_COURSE), a.get(C_STATUS), a.get(C_ADM), a.get(C_BACKOUT),
+            a.get(C_RELEV), a.get(C_REF),
+            a.get(C_COURSE), a.get(C_REMARKS), a.get(C_ADM), a.get(C_BACKOUT),
             a.get(C_COUNSEL), a.get(C_GMEET), a.get(C_WALKSCH),
             format_journey(a.get(C_HIST)), status,
         ])
@@ -761,12 +762,12 @@ def lead_detail_rows(tab, leads):
 
 # Headline exec-summary metrics rendered in bold.
 EXEC_KPI = {"Total Leads (Fresh + Repeat)", "Fresh (New) Leads", "Repeat Leads",
-            "Referral Leads", "Fresh (Non-Ref Connected)"}
+            "Referral Leads", "Fresh Connected"}
 
-SRC_HEADER = ["Source", "Total Leads", "Fresh (New) Leads", "Fresh (Non-Ref Connected)",
+SRC_HEADER = ["Source", "Total Leads", "Fresh (New) Leads", "Fresh Connected",
               "Repeat Leads", "Interactions", "Valid", "Relevant", "Irrelevant", "Referral",
               "GMeet Sch.", "Walk-in Sch.", "% Contribution"]
-CB_HEADER = ["Counselling By", "Total Leads", "Fresh (New) Leads", "Fresh (Non-Ref Connected)",
+CB_HEADER = ["Counselling By", "Total Leads", "Fresh (New) Leads", "Fresh Connected",
              "Repeat Leads", "Interactions", "Valid", "Relevant", "Irrelevant", "Referral",
              "GMeet Sch.", "Walk-in Sch.", "% Contribution"]
 
@@ -833,7 +834,7 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         segs = [
             ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_nonref), fresh_rgb, fresh_hex),
-            (_SEP + "Fresh (Non-Ref Connected):  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            (_SEP + "Fresh Connected:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_nonref_conn), fresh_conn_rgb, fresh_conn_hex),
             (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_rel_nonref), rel_rgb, rel_hex),
@@ -866,7 +867,7 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         segs = [
             ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_nonref), fresh_rgb, fresh_hex),
-            (_SEP + "Fresh (Non-Ref Connected):  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            (_SEP + "Fresh Connected:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_nonref_conn), fresh_conn_rgb, fresh_conn_hex),
             (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (str(fresh_rel_nonref), rel_rgb, rel_hex),
@@ -949,7 +950,7 @@ def _apply_metric_header_line(tab, leads):
     segs = [
         ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (str(fresh_nonref), fresh_rgb, fresh_hex),
-        (_SEP + "Fresh (Non-Ref Connected):  ", CLR_SUB_FG, HEX["SUB_FG"]),
+        (_SEP + "Fresh Connected:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (str(fresh_nonref_conn), fresh_conn_rgb, fresh_conn_hex),
         (_SEP + "Fresh-Relevant:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (str(fresh_rel), rel_rgb, rel_hex),
@@ -2773,6 +2774,15 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
     a named call-to-action link, and the IntelliBI signature."""
     es = exec_summary(active)
 
+    # Display names for the four second-row metric cards — rendered on multiple
+    # lines so they read cleanly and all four blocks line up. Metric 1 gets a blank
+    # spacer line (&nbsp;) so every block is the same 3-line height and stays aligned
+    # with the others. Display-only: the values, colours and calculations are unchanged.
+    _LBL_FRESH        = "Fresh<br>Non-Ref<br>&nbsp;"
+    _LBL_FRESH_CONN   = "Fresh<br>Non-Ref<br>Connected"
+    _LBL_FRESHREL     = "Fresh-Relevant<br>Non-Ref<br>Connected"
+    _LBL_FRESHREL_PCT = "Fresh-Relevant %<br>Non-Ref<br>Connected"
+
     def val(metric):
         v = es.get(metric)
         return v[0] if v else 0
@@ -2805,12 +2815,12 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
         fresh_conn_hex = TXT_GREEN_HEX if avg_daily_fresh_conn >= fresh_nonref_target() else TXT_RED_HEX
         rel_hex = TXT_GREEN_HEX if avg_rel_pct > 80 else TXT_RED_HEX
         kpis2 = [
-            ("Fresh (Non-Ref)", fresh_nonref, fresh_hex),
-            ("Fresh (Non-Ref Connected)", fresh_nonref_conn, fresh_conn_hex),
-            ("Fresh-Relevant (Non-Ref)", fresh_rel_nonref, rel_hex),
+            (_LBL_FRESH, fresh_nonref, fresh_hex),
+            (_LBL_FRESH_CONN, fresh_nonref_conn, fresh_conn_hex),
+            (_LBL_FRESHREL, fresh_rel_nonref, rel_hex),
             # Fresh-Relevant % — same value/colour as the Summary tab header's 3rd
             # metric (Fresh-Relevant %: XX.X%), coloured by the > 80 verdict (rel_hex).
-            ("Fresh-Relevant %", f"{avg_rel_pct:.1f}%", rel_hex),
+            (_LBL_FRESHREL_PCT, f"{avg_rel_pct:.1f}%", rel_hex),
             ("Avg Daily Fresh (Non-Referral)", f"{avg_daily_fresh:.2f}", fresh_hex),
             ("Avg Daily Fresh-Relevant (Non-Referral)", f"{avg_daily_fresh_rel:.2f}", fresh_hex),
             ("Avg Daily Fresh-Relevant (Non-Referral)", f"{avg_rel_pct:.1f}%", rel_hex),
@@ -2825,12 +2835,12 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
         fresh_hex = TXT_GREEN_HEX if fresh_nonref >= fresh_nonref_target() else TXT_RED_HEX
         fresh_conn_hex = TXT_GREEN_HEX if fresh_nonref_conn >= fresh_nonref_target() else TXT_RED_HEX
         rel_hex = TXT_GREEN_HEX if rel_pct > 80 else TXT_RED_HEX
-        kpis2 = [("Fresh (Non-Ref)", fresh_nonref, fresh_hex),
-                 ("Fresh (Non-Ref Connected)", fresh_nonref_conn, fresh_conn_hex),
-                 ("Fresh-Relevant (Non-Ref)", fresh_rel_nonref, rel_hex),
+        kpis2 = [(_LBL_FRESH, fresh_nonref, fresh_hex),
+                 (_LBL_FRESH_CONN, fresh_nonref_conn, fresh_conn_hex),
+                 (_LBL_FRESHREL, fresh_rel_nonref, rel_hex),
                  # Fresh-Relevant % — same value/colour as the Summary tab header's
                  # 3rd metric (Fresh-Relevant %: XX.X%), coloured by the > 80 verdict.
-                 ("Fresh-Relevant %", f"{rel_pct:.1f}%", rel_hex)]
+                 (_LBL_FRESHREL_PCT, f"{rel_pct:.1f}%", rel_hex)]
 
     # Lead Completion % — kept on its OWN line (a separate card row, below the
     # Fresh/Fresh-Relevant metrics), colour-coded like the report header:
@@ -2842,11 +2852,11 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
 
     def _cards(items):
         return "".join(
-            "<td style='padding:6px'>"
+            "<td style='padding:6px;vertical-align:top'>"
             "<div style='background:#f4f8fd;border:1px solid #e2e8f0;border-radius:8px;"
             "padding:14px 10px;text-align:center'>"
             f"<div style='font-size:24px;font-weight:700;color:#{color}'>{v}</div>"
-            f"<div style='font-size:12px;color:#5b6b86;margin-top:2px'>{lbl}</div>"
+            f"<div style='font-size:12px;color:#5b6b86;margin-top:4px;line-height:1.4'>{lbl}</div>"
             "</div></td>"
             for lbl, v, color in items)
     cards = _cards(kpis)
