@@ -346,6 +346,28 @@ def count_fresh_rel_nonref_connected(leads):
                and yes(a.get(C_RELEV)) and is_wa_web_connected(a))
 
 
+# ── Relevant / Irrelevant lead classification — SAME relevance rule as
+#    Fresh-Relevant (IsLeadRelevant = Yes AND connected). A Website / WhatsApp
+#    (optionally + IntelliBI) lead that is Unable to Connect
+#    (IsWhatsAppWebConnect = No) is therefore counted as IRRELEVANT, not Relevant
+#    — i.e. that count moves from Relevant to Irrelevant. Reused everywhere the
+#    Relevant/Irrelevant counts are shown (Executive Summary, Lead Source
+#    Performance, Counsellor Performance — Summary tab AND each individual
+#    counsellor report, plus the email) so the numbers stay consistent.
+def is_relevant_lead(row):
+    """Relevant = IsLeadRelevant Yes AND connected (not a Website/WhatsApp
+    Unable-to-Connect lead)."""
+    return yes(row.get(C_RELEV)) and is_wa_web_connected(row)
+
+
+def is_irrelevant_lead(row):
+    """Irrelevant = explicitly IsLeadRelevant No, OR a Relevant lead that could
+    not be connected (Website/WhatsApp Unable-to-Connect) — moved from Relevant."""
+    if s(row.get(C_RELEV)).lower() == "no":
+        return True
+    return yes(row.get(C_RELEV)) and not is_wa_web_connected(row)
+
+
 def is_admission_confirmed(row):
     return "confirm" in s(row.get(C_ADM)).lower()
 
@@ -506,8 +528,8 @@ def exec_summary(active):
     fup = total - new
     valid = sum(1 for a in active if yes(a.get(C_VALID)))
     invalid = sum(1 for a in active if s(a.get(C_VALID)).lower() == "no")
-    rel = sum(1 for a in active if yes(a.get(C_RELEV)))
-    irr = sum(1 for a in active if s(a.get(C_RELEV)).lower() == "no")
+    rel = sum(1 for a in active if is_relevant_lead(a))
+    irr = sum(1 for a in active if is_irrelevant_lead(a))
     ref = sum(1 for a in active if is_referral(a))
     fresh_nonref_conn = count_fresh_nonref_connected(active)
     gmeet = sum(1 for a in active if yes(a.get(C_GMEET)))
@@ -583,8 +605,8 @@ def source_perf(active):
             repeat = n - fresh
         inter = sum(a.get("_srcs_inper", []).count(label) for a in g)  # in-period touches via this channel
         valid = sum(1 for a in g if yes(a.get(C_VALID)))
-        rel = sum(1 for a in g if yes(a.get(C_RELEV)))
-        irr = sum(1 for a in g if s(a.get(C_RELEV)).lower() == "no")
+        rel = sum(1 for a in g if is_relevant_lead(a))
+        irr = sum(1 for a in g if is_irrelevant_lead(a))
         ref = sum(1 for a in g if is_referral(a))
         gm = sum(1 for a in g if yes(a.get(C_GMEET)))
         wk = sum(1 for a in g if yes(a.get(C_WALKSCH)))
@@ -629,8 +651,8 @@ def counsellor_perf(active):
             disp[key], n, fresh, fresh_nrc, repeat,
             sum(a["_ninper"] for a in g),
             sum(1 for a in g if yes(a.get(C_VALID))),
-            sum(1 for a in g if yes(a.get(C_RELEV))),
-            sum(1 for a in g if s(a.get(C_RELEV)).lower() == "no"),
+            sum(1 for a in g if is_relevant_lead(a)),
+            sum(1 for a in g if is_irrelevant_lead(a)),
             sum(1 for a in g if is_referral(a)),
             sum(1 for a in g if yes(a.get(C_GMEET))),
             sum(1 for a in g if yes(a.get(C_WALKSCH))),
@@ -2902,6 +2924,18 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
     rel_hex        = TXT_GREEN_HEX if rel_pct > 80 else TXT_RED_HEX
     comp_hex       = TXT_GREEN_HEX if _comp_pct > 90 else TXT_RED_HEX
 
+    # ---- Google Meet & Walk-In (REUSE existing exec-summary values) ------------
+    # gmeet / walk-in / relevant-leads are the SAME already-calculated values shown
+    # in the Summary tab (Scheduled Follow-ups + Executive Summary → Relevant Leads,
+    # which uses the updated Relevant logic). No separate/duplicate calculation.
+    gmeet_sched  = val("Google Meets Scheduled")
+    walkin_sched = val("Walk-ins Scheduled")
+    relevant_leads = val("Relevant Leads")
+    # Meet & Walk-In % = (Google Meet + Walk-In) / Relevant Leads × 100.
+    # Zero/blank Relevant Leads → 0.0% (same safe convention as rel_pct above).
+    meet_walk_pct = ((gmeet_sched + walkin_sched) / relevant_leads * 100.0) if relevant_leads else 0.0
+    meet_walk_hex = TXT_GREEN_HEX if meet_walk_pct >= 80 else TXT_RED_HEX
+
     # ---- Card / section / bar helpers -----------------------------------------
     def _cards(items):
         return "".join(
@@ -2971,6 +3005,13 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
                      ("Avg Fresh-<br>Relevant %", f"{rel_pct:.0f}%", rel_hex)]
         body_sections += _sec("Daily Averages") + _card_block(daily_avg, 3)
 
+    # ---- Google Meet & Walk-In Scheduled (reuse exec-summary values) ----------
+    meet_walk = [("Google Meet", gmeet_sched, NAVY_HEX),
+                 ("Walk-In", walkin_sched, NAVY_HEX),
+                 ("Meet &amp; Walk-In %", f"{meet_walk_pct:.0f}%", meet_walk_hex)]
+    body_sections += (_sec("Google Meet &amp; Walk-In Scheduled")
+                      + _card_block(meet_walk, 3))
+
     # ---- Performance vs Goals (bars, from Option C) ---------------------------
     _tgt = _lead_target if _lead_target else 1
     bars = (_sec("Performance vs Goals")
@@ -2978,7 +3019,9 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
                    fresh_nonref / _tgt * 100.0, fresh_hex, 100,
                    "Green when Fresh reaches the period Lead Target")
             + _bar("Fresh-Relevant %", f"{rel_pct:.0f}%", rel_pct, rel_hex, 80, "Goal: 80%")
-            + _bar("Lead Completion %", f"{_comp_pct:.0f}%", _comp_pct, comp_hex, 90, "Goal: 90%"))
+            + _bar("Lead Completion %", f"{_comp_pct:.0f}%", _comp_pct, comp_hex, 90, "Goal: 90%")
+            + _bar("Google Meet &amp; Walk-In %", f"{meet_walk_pct:.0f}%", meet_walk_pct,
+                   meet_walk_hex, 80, "Goal: 80%"))
 
     return f"""<html><body style="margin:0;padding:24px;background:#eef2f8;
   font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#1a2a48">
