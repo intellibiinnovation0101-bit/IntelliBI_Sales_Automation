@@ -2340,6 +2340,31 @@ def add_followup_trend_chart_only(t, group_leads, ptype, period_range, gen=None)
         anchor_row=1, anchor_col=4, height=4.5, width=26))
 
 
+def _priority_mix_rows(mix_src, bands):
+    """Lead Priority Mix (by Conversion Chance %) — per-band breakdown over the
+    UNIQUE leads in ``mix_src`` (mobile/email de-duplicated, exactly as before).
+
+    Single source of truth shared by the overall Summary tab and each Individual
+    Counsellor Report (the counsellor simply passes only that counsellor's own
+    applicable leads). Returns a list of rows, each:
+        [Priority, Leads, % of Active, Conversion-Chance Range, Avg Chance].
+    """
+    seen_pm, uniq_pm = set(), []
+    for l in mix_src:
+        k = digits10(l.get("mobile", "")) or ("email:" + norm_email(l.get("email", "")))
+        if not k or k in seen_pm:
+            continue
+        seen_pm.add(k); uniq_pm.append(l)
+    n_pm = len(uniq_pm)
+    rows = []
+    for name, lo, hi in bands:
+        grp = [l for l in uniq_pm if l["priority"] == name]
+        rng = (f"{lo*100:.0f}%+" if hi > 1 else f"{lo*100:.0f}% – {hi*100:.0f}%")
+        avg = (sum(l["conversion_chance"] for l in grp) / len(grp)) if grp else 0
+        rows.append([name, len(grp), pct(len(grp), n_pm), rng, f"{avg:.1f}%"])
+    return rows
+
+
 def build_summary_tab(period_label, period_range, leads, model, bands, gen,
                       period_pending=None, total_pending=None, overdue_count=None,
                       done_count=None, remaining_count=None, mix_leads=None,
@@ -2465,18 +2490,8 @@ def build_summary_tab(period_label, period_range, leads, model, bands, gen,
     mix_src = mix_leads if mix_leads is not None else leads
     t.title("Lead Priority Mix (by Conversion Chance %)")
     t.header(["Priority", "Leads", "% of Active", "Conversion-Chance Range", "Avg Chance"])
-    seen_pm, uniq_pm = set(), []
-    for l in mix_src:
-        k = digits10(l.get("mobile", "")) or ("email:" + norm_email(l.get("email", "")))
-        if not k or k in seen_pm:
-            continue
-        seen_pm.add(k); uniq_pm.append(l)
-    n_pm = len(uniq_pm)
-    for name, lo, hi in bands:
-        grp = [l for l in uniq_pm if l["priority"] == name]
-        rng = (f"{lo*100:.0f}%+" if hi > 1 else f"{lo*100:.0f}% – {hi*100:.0f}%")
-        avg = (sum(l["conversion_chance"] for l in grp) / len(grp)) if grp else 0
-        t.row([name, len(grp), pct(len(grp), n_pm), rng, f"{avg:.1f}%"])
+    for _mrow in _priority_mix_rows(mix_src, bands):
+        t.row(_mrow)
     return t
 
 
@@ -2799,7 +2814,70 @@ def _safe_tab_name(base, used):
     return cand
 
 
-def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
+def _put(t, ri, ci, value):
+    """Write a single value into the Tab grid at (ri, ci), growing the row list /
+    row width as needed. Used only for hand-laid side-by-side blocks; it does NOT
+    register the row as a title/header/kpi, so the base table styling of the rows
+    it writes into is left untouched."""
+    while len(t.rows) <= ri:
+        t.rows.append([])
+    row = t.rows[ri]
+    if len(row) <= ci:
+        row.extend([""] * (ci + 1 - len(row)))
+    row[ci] = value
+
+
+def _lay_counsellor_priority_mix(t, summary_top, col0, mix_src, bands):
+    """Place the 'Lead Priority Mix (by Conversion Chance %)' report to the RIGHT
+    of the per-counsellor 'Summary — <name>' block. Uses the SAME calculation,
+    categories, colours and design as the overall Summary tab — only the data is
+    filtered to this counsellor (via ``mix_src``). Hand-laid with explicit per-cell
+    formatting so the existing Summary block is not restructured.
+
+    Layout (summary_top = the 'Summary — <name>' section-title row; the Summary
+    block below it is: title, 'Metric/Value' header, then five KPI rows):
+        summary_top      : mix section title  (aligned with the Summary title)
+        summary_top+1    : (Summary header row — left as-is; a blank gap here)
+        summary_top+2    : mix header row
+        summary_top+3..6 : the four priority-band rows
+    The mix sits at columns col0..col0+4, clear of the Summary block's two columns.
+    """
+    MIX_HDR = ["Priority", "Leads", "% of Active", "Conversion-Chance Range", "Avg Chance"]
+    ncol = len(MIX_HDR)
+    rows = _priority_mix_rows(mix_src, bands)
+
+    # ── section title (same SEC styling as the Summary tab's section titles) ──
+    _put(t, summary_top, col0, "Lead Priority Mix (by Conversion Chance %)")
+    for j in range(ncol):
+        if j:
+            _put(t, summary_top, col0 + j, "")
+        t.set_fmt(summary_top, col0 + j, bg=CLR_SEC_BG, fg=CLR_SEC_FG, bold=True)
+
+    # ── header row (same HDR styling) ──
+    hdr_row = summary_top + 2
+    for j, h in enumerate(MIX_HDR):
+        _put(t, hdr_row, col0 + j, h)
+        t.set_fmt(hdr_row, col0 + j, bg=CLR_HDR_BG, fg=CLR_HDR_FG, bold=True)
+
+    # ── the four priority-band rows (fixed band colours + dark readable text) ──
+    for i, mrow in enumerate(rows):
+        rr = hdr_row + 1 + i
+        band = mrow[0]
+        for j, val in enumerate(mrow):
+            _put(t, rr, col0 + j, val)
+            t.set_fmt(rr, col0 + j, bg=BAND_RGB.get(band, CLR_ALT_BG),
+                      fg=BAND_TEXT_RGB, bold=False)
+        # The band name now present on this row makes the generic row-colourer
+        # tint the Summary 'Metric/Value' cells (cols 0-1). Restore those two
+        # cells to the exact Executive-Snapshot KPI styling so the Summary block
+        # stays visually unchanged (alt-row banding + bold, no priority tint).
+        k = rr - (summary_top + 2)               # 0-based index within the KPI span
+        kpi_bg = CLR_ALT_BG if (k % 2 == 1) else (1.0, 1.0, 1.0)
+        for cc in (0, 1):
+            t.set_fmt(rr, cc, bg=kpi_bg, fg=(0.0, 0.0, 0.0), bold=True)
+
+
+def build_counsellor_detail_tabs(leads, gen, period_label, period_range, bands):
     """One tab per counsellor: a counsellor summary followed by that
     counsellor's individual leads (lead -> current status -> interaction
     history -> follow-up progress -> next follow-up -> meet/walk-in ->
@@ -2850,6 +2928,7 @@ def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
 
         t = Tab(_safe_tab_name(cb, used))
         add_header(t, f"Counsellor — {cb}", period_range, gen)
+        summary_top = len(t.rows)              # row of the 'Summary — <cb>' title
         t.title(f"Summary — {cb}")
         # Individual counsellor Summary: only the five follow-up metrics, in a
         # Metric + Value table that visually matches the overall Executive
@@ -2863,9 +2942,16 @@ def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
         t.row(["Total Follow-Ups Remaining", fu_remaining], kpi=True)
         t.blank()
 
+        # Lead Priority Mix (by Conversion Chance %) — the SAME report as the
+        # Summary tab, computed on ONLY this counsellor's applicable leads (g), laid
+        # to the RIGHT of the 'Summary — <cb>' block above. Purely additive: the
+        # Summary block's own cells are left unchanged.
+        _lay_counsellor_priority_mix(t, summary_top, 3, g, bands)
+
         t.title(f"Total Follow-Up Pending Leads — {cb}  ({fu_pending})")
         t.header(["Rank", "Priority", "Conversion Chance %", "Lead Name", "Mobile",
-                  "Current Status", "Lead Interaction History",
+                  "Current Status", "Experience", "Notes / Remarks",
+                  "Lead Interaction History",
                   "Follow-Ups (Done/Rem)", "Last Follow-Up", "Next Follow-Up",
                   "Follow-Up Status", "Follow-Up Completion Status",
                   "Meet", "Walk-In", "Next Best Action"], filterable=True)
@@ -2873,6 +2959,7 @@ def build_counsellor_detail_tabs(leads, gen, period_label, period_range):
             fu = l["followup"]
             t.row([l.get("_rank", ""), l["priority"], f"{l['conversion_chance']:.1f}%",
                    l["name"], l["mobile"], l["current_status"],
+                   l["experience"], l["notes"],
                    clean_history(l["history"]),
                    f"{fu['done']}/{fu['remaining']}", fu["last_follow"],
                    fu["next_follow"], l.get("_followup_status", ""),
@@ -3388,7 +3475,7 @@ def build_report(period_label, period_range, leads, model, bands, gen,
     # one tab per counsellor — built from the SAME pending dataset so each
     # counsellor shows only their share of the Total Follow-Up Pending leads.
     for name, tab in build_counsellor_detail_tabs(
-            pend, gen, period_label, period_range).items():
+            pend, gen, period_label, period_range, bands).items():
         tabs[name] = tab
     tabs["Conversion Model"] = build_model_tab(model, bands, gen)
     return tabs

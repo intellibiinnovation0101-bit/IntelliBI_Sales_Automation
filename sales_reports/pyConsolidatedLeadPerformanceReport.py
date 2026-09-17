@@ -836,6 +836,15 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
     # Fresh-Relevant % keeps its formula: updated Fresh-Relevant (Non-Ref) over the
     # RAW Fresh (Non-Ref) denominator (unchanged).
     rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
+    # Google Meet & Walk-In % — LAST header metric. Reuses the existing predicates:
+    # (Google Meets Scheduled + Walk-ins Scheduled) / Relevant Leads (updated
+    # relevance) × 100; green when >= 80 %, else red (same as the email metric).
+    _mw_gmeet = sum(1 for a in active if yes(a.get(C_GMEET)))
+    _mw_walk  = sum(1 for a in active if yes(a.get(C_WALKSCH)))
+    _mw_rel   = sum(1 for a in active if is_relevant_lead(a))
+    _mw_pct   = ((_mw_gmeet + _mw_walk) / _mw_rel * 100.0) if _mw_rel else 0.0
+    _mw_rgb, _mw_hex = ((TXT_GREEN, TXT_GREEN_HEX) if _mw_pct >= 80
+                        else (TXT_RED, TXT_RED_HEX))
     segs = None
 
     if period_label == "Daily":
@@ -905,6 +914,11 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         ]
 
     if segs:
+        # Google Meet & Walk-In % appended as the LAST header metric.
+        segs = segs + [
+            (_SEP + "Google Meet & Walk-In %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            (f"{_mw_pct:.1f}%", _mw_rgb, _mw_hex),
+        ]
         # Lead Target — added as the FIRST header metric. Value = the same period-aware
         # target used for the colour logic (lead_target_per_counsellor × applicable
         # counsellors for THIS report period). Shown neutral (not green/red).
@@ -977,6 +991,15 @@ def _apply_metric_header_line(tab, leads, start=None, end=None):
                         else (TXT_RED, TXT_RED_HEX))
     comp_rgb, comp_hex = ((TXT_GREEN, TXT_GREEN_HEX) if comp_pct > 90
                           else (TXT_RED, TXT_RED_HEX))
+    # Google Meet & Walk-In % — LAST header metric, computed from THIS counsellor's
+    # own leads only. (Google Meets + Walk-ins Scheduled) / Relevant Leads (updated
+    # relevance) × 100; green when >= 80 %, else red — same rule as the email metric.
+    _mw_gmeet = sum(1 for a in leads if yes(a.get(C_GMEET)))
+    _mw_walk  = sum(1 for a in leads if yes(a.get(C_WALKSCH)))
+    _mw_rel   = sum(1 for a in leads if is_relevant_lead(a))
+    _mw_pct   = ((_mw_gmeet + _mw_walk) / _mw_rel * 100.0) if _mw_rel else 0.0
+    _mw_rgb, _mw_hex = ((TXT_GREEN, TXT_GREEN_HEX) if _mw_pct >= 80
+                        else (TXT_RED, TXT_RED_HEX))
     segs = [
         ("Fresh:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (str(fresh_nonref), fresh_rgb, fresh_hex),
@@ -988,6 +1011,8 @@ def _apply_metric_header_line(tab, leads, start=None, end=None):
         (f"{rel_pct:.1f}%", rel_rgb, rel_hex),
         (_SEP + "Lead Completion %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (f"{comp_pct:.1f}%", comp_rgb, comp_hex),
+        (_SEP + "Google Meet & Walk-In %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+        (f"{_mw_pct:.1f}%", _mw_rgb, _mw_hex),
     ]
     text = "".join(seg[0] for seg in segs)
     if len(tab.rows) > 1:
