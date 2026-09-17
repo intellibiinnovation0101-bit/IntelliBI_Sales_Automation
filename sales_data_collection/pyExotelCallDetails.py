@@ -277,20 +277,47 @@ MATCH_KEYS = ["Sid"]
 UNAVAILABLE_BLANK = ["FromName", "ToName", "Outcome",
                      "Assign To", "Notes", "Transcription"]
 
-# ── Fallback ToName mapping (internal agent / escalation numbers) ─────────────
+# ── Fallback ToName mapping (internal counsellor numbers) ─────────────────────
 # Priority 2: the CCM API / Address Book only carry customer-contact names, so
-# the ATTENDEE (internal agent / escalation) name is often missing — which is why
-# ToName stays blank even though the To phone number is present. When ToName is
-# still blank after API enrichment, derive it from the To number using this map.
-# Keys are the LAST-10 digits (matched via ec._digits10), so formatting
-# differences — leading/trailing spaces, +91 / 91 country code, a leading 0,
-# numeric-vs-string — all resolve to the same key automatically.
-TO_NAME_FALLBACK = {
-    "7387028359": "Akash Sahu",
-    "8484989915": "ArshKhan Pathan",
-    "9022344821": "Harish Rathod",
-    "9970691112": "IntelliBI Escalation",   # 09970691112 → last 10 digits
-}
+# the ATTENDEE (internal counsellor) name is often missing — which is why ToName
+# stays blank even though the To phone number is present. When ToName is still
+# blank after API enrichment, derive it from the To number using this map.
+#
+# The map is built DYNAMICALLY from config/counsellors.json — no counsellor name
+# or phone number is hardcoded. Only counsellors whose current_status == "Active"
+# are included, and each office_number is normalised with the SAME helper the call
+# rows use (ec._digits10 → LAST-10 digits), so formatting differences — spaces,
+# +91 / 91 country code, a leading 0, a stray unicode character, numeric-vs-string
+# — all resolve to the same key. A reassigned number or a newly added counsellor
+# is therefore picked up automatically on the next run, with no code change.
+COUNSELLORS_CONFIG_FILE = os.path.join(CONFIG_DIR, "counsellors.json")
+
+
+def load_counsellor_name_map(path=COUNSELLORS_CONFIG_FILE):
+    """Return {last-10-digit office number -> counsellor name} for ACTIVE
+    counsellors, read from config/counsellors.json. Numbers are normalised exactly
+    like the call rows (ec._digits10). Returns {} on any read/parse error so the
+    ToName fallback is simply skipped rather than breaking the run."""
+    _log = logging.getLogger("exotel_call_sync")
+    mapping = {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:                       # noqa: BLE001
+        _log.warning("Counsellor config not read (%s) — ToName fallback disabled "
+                     "this run.", exc)
+        return mapping
+    for c in (data.get("counsellors") or []):
+        if str(c.get("current_status", "")).strip().lower() != "active":
+            continue
+        name = str(c.get("counsellor_name", "")).strip()
+        key = ec._digits10(c.get("office_number", ""))
+        if name and key:
+            mapping[key] = name          # current active owner of a number wins
+    return mapping
+
+
+TO_NAME_FALLBACK = load_counsellor_name_map()
 
 
 # ══════════════════════════════════════════════════════════════════════════
