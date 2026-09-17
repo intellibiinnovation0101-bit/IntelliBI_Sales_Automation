@@ -1437,7 +1437,14 @@ def build_history(records):
     entries = []                                   # list of (src, date, cby)
     for r in ordered:
         src  = SOURCE_LABEL[r["_source"]]
-        date = fmt_dt(r["_ts"]) if r["_ts"] else clean_text(r.get("LeadInitalTimestamp", ""))
+        # Every enquiry must contribute exactly one Lead Date token so the four
+        # lines stay positionally aligned (Enq Num <-> Source <-> Date <-> Cby).
+        # When a source record has no usable timestamp (e.g. a manually-added
+        # Walk-In whose sheet 'Timestamp' cell is blank), fall back to "-" (the
+        # same missing-value placeholder used for Counselling By below) instead
+        # of an empty token that would collapse this enquiry's date slot.
+        date = (fmt_dt(r["_ts"]) if r["_ts"]
+                else clean_text(r.get("LeadInitalTimestamp", ""))) or "-"
         cby  = r["_counsel"] or "-"
         entry = (src, date, cby)
         if entries and entries[-1] == entry:       # consecutive duplicate -> skip
