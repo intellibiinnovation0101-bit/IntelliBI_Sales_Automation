@@ -817,6 +817,60 @@ def add_exec_summary(tab, active):
     tab.blank()
 
 
+def leadtype_share_rows(active, day=None):
+    """Lead Type Share Analysis — the SAME calculation and table content as the
+    'Lead Type Share Analysis' block in the Hourly Lead Type Analysis tab, but
+    returning ONLY the table parts (header, per-type rows, total) — no chart.
+
+    Reuses the exact filtering/counting via _leadtype_hourly (Fresh-Relevant,
+    Non-Referral) + _ordered_lead_types, and the identical count/share-% formula
+    and cell text. Scope it to any lead set (e.g. one counsellor's leads)."""
+    by, hours, present = _leadtype_hourly(active, day)
+    lead_types = _ordered_lead_types(present) or [LEAD_TYPE_UNIDENTIFIED]
+    col_tot = {lt: 0 for lt in lead_types}
+    grand = 0
+    for _h, counts in by.items():
+        for lt in lead_types:
+            c = int(counts.get(lt, 0))
+            col_tot[lt] += c
+            grand += c
+    header = ["Lead Type  -  Count (Share %)", "Lead Count"]
+    data = []
+    for lt in lead_types:                       # fixed business order (same as tab)
+        cnt = int(col_tot[lt])
+        pshare = (cnt / grand * 100.0) if grand else 0.0
+        data.append([f"{lt}  -  {cnt} ({pshare:.1f}%)", cnt])
+    total = [f"Total  -  {int(grand)} (100.0%)", int(grand)]
+    return header, data, total
+
+
+def attach_side_table(tab, r0, c0, title, header, data, total):
+    """Write a small standalone table into the grid starting at (row r0, col c0),
+    0-based, WITHOUT disturbing whatever already occupies columns 0..c0-1 on those
+    rows. Values are placed into the existing rows (padded as needed); the block's
+    geometry is recorded on tab.side_tables so the renderers can format it (title /
+    header / alternating band / total) at the offset columns. Additive only."""
+    lines = [[title], list(header)] + [list(d) for d in data] + [list(total)]
+    width = max(len(header), 1)
+    while len(tab.rows) < r0 + len(lines):
+        tab.blank()
+    for k, cells in enumerate(lines):
+        row = tab.rows[r0 + k]
+        need = c0 + len(cells)
+        if len(row) < need:
+            row.extend([""] * (need - len(row)))
+        for j, v in enumerate(cells):
+            row[c0 + j] = v
+    if getattr(tab, "side_tables", None) is None:
+        tab.side_tables = []
+    tab.side_tables.append({
+        "c0": c0, "width": width,
+        "title_row": r0, "header_row": r0 + 1,
+        "first_data": r0 + 2, "last_data": r0 + 1 + len(data),
+        "total_row": r0 + 2 + len(data),
+    })
+
+
 def build_summary_tab(period_label, period_range, active, gen_stamp,
                       start=None, end=None):
     t = Tab("Summary")
@@ -1909,7 +1963,15 @@ def build_report(period_label, period_range, df, start, end):
         tb = Tab(tname)
         add_report_header(tb, f"Counsellor: {cb}", period_range, gen_stamp)
         _apply_metric_header_line(tb, leads, start, end)   # per-counsellor metrics + Lead Completion %
+        _exec_title_idx = len(tb.rows)                     # row where "Executive Summary" begins
         add_exec_summary(tb, leads)
+        # Lead Type Share Analysis TABLE (no chart) to the RIGHT of the Executive
+        # Summary, scoped to THIS counsellor's own leads. Same calc/table/colours
+        # as the Hourly tab's share table; placed two columns right of the 3-column
+        # Executive Summary (cols A–C), leaving a gap column (D), starting at col E.
+        _sh_header, _sh_data, _sh_total = leadtype_share_rows(leads, day=None)
+        attach_side_table(tb, _exec_title_idx, 4, "Lead Type Share Analysis",
+                          _sh_header, _sh_data, _sh_total)
         # Lead Source Performance for THIS counsellor's leads — same structure and
         # logic as the main Summary tab (source_perf + SRC_HEADER), scoped to the
         # counsellor's own active leads.
@@ -2322,6 +2384,25 @@ def write_workbook(sheets, spreadsheet_id, tabs):
             fmt_reqs.append(_fmt_range(sid, cf_ri, cf_ri + 1, cf_ci, cf_ci + 1,
                                        bold=True, bg=cf_rgb))
 
+        # side tables (e.g. per-counsellor Lead Type Share Analysis placed to the
+        # right of the Executive Summary): format title / header / band / total at
+        # their offset columns, matching the main share-table styling exactly.
+        for st in getattr(tab, "side_tables", []):
+            _c0, _w = st["c0"], st["width"]
+            fmt_reqs.append(_fmt_range(sid, st["title_row"], st["title_row"] + 1,
+                                       _c0, _c0 + _w, bold=True, size=12,
+                                       bg=CLR_SEC_BG, fg=CLR_SEC_FG))
+            fmt_reqs.append(_fmt_range(sid, st["header_row"], st["header_row"] + 1,
+                                       _c0, _c0 + _w, bold=True,
+                                       bg=CLR_HDR_BG, fg=CLR_HDR_FG))
+            for _k, _ri in enumerate(range(st["first_data"], st["last_data"] + 1)):
+                if _k % 2 == 1:
+                    fmt_reqs.append(_fmt_range(sid, _ri, _ri + 1, _c0, _c0 + _w,
+                                               bg=CLR_ALT_BG))
+            fmt_reqs.append(_fmt_range(sid, st["total_row"], st["total_row"] + 1,
+                                       _c0, _c0 + _w, bold=True,
+                                       bg=CLR_HDR_BG, fg=CLR_HDR_FG))
+
         # filter on the primary detail table (spanning that table's width)
         if tab.filter_headers:
             hi = tab.filter_headers[0]
@@ -2587,6 +2668,27 @@ def write_local_xlsx(path, tabs):
                         cell.font = Font(bold=True)
                     if "\n" in str(cell.value or ""):   # multi-line (Lead Journey)
                         cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        # side tables (per-counsellor Lead Type Share Analysis, right of the
+        # Executive Summary): same title / header / band / total styling as the
+        # main share table, painted at the offset columns.
+        for st in getattr(tab, "side_tables", []):
+            _c0, _w = st["c0"], st["width"]
+
+            def _paint_side(ri, hexbg, fg, is_bold, size=11, bordered=False):
+                for ci in range(_c0 + 1, _c0 + _w + 1):       # openpyxl is 1-based
+                    cc = ws.cell(row=ri + 1, column=ci)
+                    cc.font = Font(bold=is_bold, color=(fg or "000000"), size=size)
+                    if hexbg:
+                        cc.fill = fill(hexbg)
+                    if bordered:
+                        cc.border = grid
+
+            _paint_side(st["title_row"], HEX["SEC"], HEX["SEC_FG"], True, 12)
+            _paint_side(st["header_row"], HEX["HDR"], HEX["HDR_FG"], True, bordered=True)
+            for _k, _ri in enumerate(range(st["first_data"], st["last_data"] + 1)):
+                _paint_side(_ri, (HEX["ALT"] if _k % 2 == 1 else None), None, False)
+            _paint_side(st["total_row"], HEX["HDR"], HEX["HDR_FG"], True)
 
         # freeze: through the detail header only if it's near the top; else the
         # banner row (CB tabs never freeze the whole summary).
