@@ -63,6 +63,7 @@ import re
 import sys
 import csv
 import copy
+import json
 import math
 import glob
 import calendar
@@ -159,18 +160,14 @@ OUTPUT_SUBFOLDERS = {
 # Same configuration/recipients as pyConsolidatedLeadPerformanceReport.py: Gmail
 # SMTP from config_files/email_config.py (GMAIL_SENDER / GMAIL_APP_PASS).
 SEND_EMAIL       = True
-EMAIL_RECIPIENTS = [
-    "harishintellibi@gmail.com",
-    "salesintellibi01@gmail.com",
-    "info@intellibiinnovationstechnologies.in",
-    "salesintellibi03@gmail.com",
-    "163manish.sharma@gmail.com",
-]
-# Recipients who must NOT receive the link to the full (unmasked) report — they
-# still get the same aggregate summary email, just without the detailed-report
-# link (this report has no masked copy). Mirrors the consolidated report's rule
-# of never sending unmasked lead detail to a masking recipient.
-MASK_RECIPIENTS = {"163manish.sharma@gmail.com"}
+# Email recipients are NO LONGER hardcoded — they are built LIVE from
+# config/counsellors.json (Active records only), using the SAME dynamic
+# configuration approach as pyConsolidatedLeadPerformanceReport.py.
+# EMAIL_RECIPIENTS, MASK_RECIPIENTS and EMAIL_NAMES are populated further below,
+# once the config path (CONFIG_DIR / _COUNSELLORS_JSON) is available. Section rules:
+#   • counsellors, intellibiadmin  -> normal recipients (full report link)
+#   • digitalmarketingspecialist   -> masked recipients (masked report link)
+# New counsellors or email changes flow through counsellors.json with no code change.
 
 # ── Auth (same pattern as the existing report) ───────────────────────────────
 # This script lives in the "Reports" sub-folder, so PROJECT_ROOT is its PARENT
@@ -183,6 +180,93 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import _bootstrap  # noqa: E402  (sys.path + env defaults + config.yaml)
 from paths import CREDENTIALS_DIR, CONFIG_DIR, LOGS_DIR  # noqa: E402
 # --- end bootstrap ---
+
+# ── Email recipients + names, built LIVE from config/counsellors.json ────────
+# EXACTLY the dynamic configuration approach used in
+# pyConsolidatedLeadPerformanceReport.py. Address field on each record is
+# "emailid"; only current_status == "Active" records are used. Sections map to
+# send-mode, and each section's own name field drives the personalized greeting:
+#   counsellors, intellibiadmin      -> normal recipients (full report link)
+#   digitalmarketingspecialist       -> masked recipients (masked report link)
+# New counsellors or email changes flow through counsellors.json with no code change.
+_COUNSELLORS_JSON = os.path.join(CONFIG_DIR, "counsellors.json")
+_EMAIL_SECTIONS_NORMAL = ("counsellors", "intellibiadmin")
+_EMAIL_SECTIONS_MASKED = ("digitalmarketingspecialist",)
+_EMAIL_SECTION_NAME_FIELD = {
+    "counsellors": "counsellor_name",
+    "digitalmarketingspecialist": "digital_marketing_specialist_name",
+    "intellibiadmin": "intellibi_admin_name",
+}
+
+
+def _active_emails(cfg, section):
+    """Trimmed 'emailid' of every Active record in `section` of the counsellors.json
+    config dict, in file order, dropping blanks and case-insensitive duplicates."""
+    out, seen = [], set()
+    for rec in (cfg.get(section) or []):
+        if str(rec.get("current_status", "")).strip().lower() != "active":
+            continue
+        em = str(rec.get("emailid", "")).strip()
+        if not em or em.lower() in seen:
+            continue
+        seen.add(em.lower())
+        out.append(em)
+    return out
+
+
+def load_recipient_names():
+    """{emailid.lower(): display_name} for every Active record across all sections,
+    each name read from that section's own name field. Used only to personalize the
+    email greeting; returns {} on any read/parse failure so the greeting simply
+    falls back to 'Hello Team,'."""
+    try:
+        with open(_COUNSELLORS_JSON, encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception:
+        return {}
+    names = {}
+    for sec, name_field in _EMAIL_SECTION_NAME_FIELD.items():
+        for rec in (cfg.get(sec) or []):
+            if str(rec.get("current_status", "")).strip().lower() != "active":
+                continue
+            em = str(rec.get("emailid", "")).strip().lower()
+            nm = str(rec.get(name_field, "")).strip()
+            if em and nm and em not in names:
+                names[em] = nm
+    return names
+
+
+def load_email_recipients():
+    """(all_recipients, mask_set) built LIVE from config/counsellors.json:
+        • all_recipients — Active emailids across counsellors + intellibiadmin
+          (normal) then digitalmarketingspecialist (masked), de-duped in that order.
+        • mask_set — the Active emailids under digitalmarketingspecialist only;
+          these get the masked report via the unchanged masking logic downstream.
+    Returns ([], set()) on any read/parse failure so a broken config sends to no one
+    rather than crashing the run."""
+    try:
+        with open(_COUNSELLORS_JSON, encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception as e:
+        print("  [email] could NOT read counsellors.json for recipients:", e)
+        return [], set()
+    normal, masked = [], []
+    for sec in _EMAIL_SECTIONS_NORMAL:
+        normal += _active_emails(cfg, sec)
+    for sec in _EMAIL_SECTIONS_MASKED:
+        masked += _active_emails(cfg, sec)
+    seen, all_recips = set(), []
+    for em in normal + masked:
+        if em.lower() not in seen:
+            seen.add(em.lower())
+            all_recips.append(em)
+    return all_recips, {m.lower() for m in masked}
+
+
+# Populate the recipient constants once at import (before any report job runs).
+EMAIL_RECIPIENTS, MASK_RECIPIENTS = load_email_recipients()
+# email(lower) -> display name, for the personalized "Hello <name>," greeting.
+EMAIL_NAMES = load_recipient_names()
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVICE_ACCOUNT_FILE = os.environ.get(
@@ -3643,7 +3727,7 @@ def send_email(subject, html_body, recipients=None):
 def build_lfa_email_body(report_type, period_range, url, link_name, gen_stamp,
                          fu_pending, fu_done, fu_remaining,
                          gm_sched, gm_att, gm_showoff,
-                         wk_sched, wk_att, wk_showoff):
+                         wk_sched, wk_att, wk_showoff, greeting_name=None):
     """Professional, self-contained HTML email in the SAME style as the
     consolidated report: header bar, KPI cards, a named call-to-action link, and
     the IntelliBI signature. Cards show the Follow-Up / Google Meet / Walk-In
@@ -3702,6 +3786,16 @@ def build_lfa_email_body(report_type, period_range, url, link_name, gen_stamp,
         cta = ("<p style='margin:0;color:#5b6b86;font-size:13px'>The detailed "
                "report is shared separately with authorised recipients.</p>")
 
+    # Personalized greeting: the recipient's name (bold, slightly larger) when
+    # provided, else the original "Hello Team,". Name is minimally HTML-escaped
+    # since it originates from config.
+    _nm = str(greeting_name or "").strip()
+    if _nm:
+        _nm_html = _nm.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        _greet = f'Hello <b style="font-size:18px">{_nm_html}</b>,'
+    else:
+        _greet = "Hello Team,"
+
     return f"""<html><body style="margin:0;padding:24px;background:#eef2f8;
   font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#1a2a48">
   <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:10px;
@@ -3711,7 +3805,7 @@ def build_lfa_email_body(report_type, period_range, url, link_name, gen_stamp,
       <div style="font-size:13px;opacity:.85;margin-top:4px">Reporting Period: {period_range}</div>
     </div>
     <div style="padding:24px 28px">
-      <p style="margin:0 0 14px">Hello Team,</p>
+      <p style="margin:0 0 14px">{_greet}</p>
       <p style="margin:0 0 18px;line-height:1.5">
         Please find the <b>{report_type}</b> lead follow-up analysis summary for
         <b>{period_range}</b>. Here is the follow-up, Google Meet and Walk-In snapshot:</p>
@@ -4141,21 +4235,27 @@ def run():
                 except Exception as e:
                     print("  [drive] masked report build/upload/share FAILED:", e)
 
-            # Authorised recipients: the full report link (unchanged).
+            # Authorised recipients: the full report link (unchanged). Sent one
+            # email per recipient so each greeting carries that person's name
+            # (from counsellors.json); the report/link they receive is unchanged.
             if normal_recips:
-                send_email(subject,
-                           build_lfa_email_body(label, rng, url, link_name, gen,
-                                                *_fu, *_gm, *_wk),
-                           normal_recips)
+                for _rcpt in normal_recips:
+                    send_email(subject,
+                               build_lfa_email_body(label, rng, url, link_name, gen,
+                                                    *_fu, *_gm, *_wk,
+                                                    greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                               [_rcpt])
             # Restricted recipient(s): the MASKED report link (Editor access
             # granted above) — NEVER the full report. If the masked copy could not
             # be produced, fall back to the summary WITHOUT any link so no
-            # unmasked lead detail ever leaves the building.
+            # unmasked lead detail ever leaves the building. Also one per recipient.
             if masked_recips:
-                send_email(subject,
-                           build_lfa_email_body(label, rng, url_masked or "", link_name,
-                                                gen, *_fu, *_gm, *_wk),
-                           masked_recips)
+                for _rcpt in masked_recips:
+                    send_email(subject,
+                               build_lfa_email_body(label, rng, url_masked or "", link_name,
+                                                    gen, *_fu, *_gm, *_wk,
+                                                    greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                               [_rcpt])
 
         # AUTO mode: the Weekly report generates once per day, on the first
         # SUCCESSFUL run. Reaching here means this job fully generated + uploaded
