@@ -6,6 +6,7 @@
       "counsellor_name": "Harish Rathod",
       "rank": 1,
       "office_number": "9022344821",
+	  "emailid": "harishintellibi@gmail.com",
       "date_of_joining": "17-Sep-2025",
       "last_date_of_employment": "",
       "current_status": "Active"
@@ -15,6 +16,7 @@
       "counsellor_name": "Akash Sahu",
       "rank": 2,
       "office_number": "7387028359",
+	  "emailid": "salesintellibi03@gmail.com",
       "date_of_joining": "21-Aug-2026",
       "last_date_of_employment": "",
       "current_status": "Active"
@@ -24,6 +26,7 @@
       "counsellor_name": "ArshKhan Pathan",
       "rank": 3,
       "office_number": "8484989915",
+	  "emailid": "salesintellibi01@gmail.com",
       "date_of_joining": "21-Jul-2026",
       "last_date_of_employment": "",
       "current_status": "Active"
@@ -33,7 +36,32 @@
       "counsellor_name": "Rajneesh Pandey",
       "rank": 3,
       "office_number": "7517511490‬",
+	  "emailid": "salesintellibi04@gmail.com",
       "date_of_joining": "10-Sep-2026",
+      "last_date_of_employment": "",
+      "current_status": "Active"
+    }
+  ],
+    "digitalmarketingspecialist": [
+    {
+      "digital_marketing_specialist_id": "DM001",
+      "digital_marketing_specialist_name": "Manish Sharma",
+      "rank": 1,
+      "office_number": "9882187338",
+	  "emailid": "163manish.sharma@gmail.com",
+      "date_of_joining": "01-Nov-2025",
+      "last_date_of_employment": "",
+      "current_status": "Active"
+    }
+  ],
+  "intellibiadmin": [
+    {
+      "digital_marketing_specialist_id": "IA001",
+      "digital_marketing_specialist_name": "IntelliBI Admin",
+      "rank": 1,
+      "office_number": "7498756891",
+	  "emailid": "info@intellibiinnovationstechnologies.in",
+      "date_of_joining": "01-Jan-2023",
       "last_date_of_employment": "",
       "current_status": "Active"
     }
