@@ -167,6 +167,8 @@ C_COURSE_ADV = "Course Advised"
 C_STATUS  = "Lead Status"
 C_ADM     = "Admission Status"
 C_BACKOUT = "Backout Reason"
+C_CITY    = "Current City"               # master column
+C_LOCALITY = "Current Area / Locality"   # master column
 C_REMARKS = "Remarks"                    # shown as the "Notes / Remarks" detail column
 C_COUNSEL = "Counselling By"
 C_GMEET   = "IsGoogleMeetSchedule"
@@ -676,12 +678,11 @@ def course_breakdown(active):
 LEAD_COLS = [C_FIRST, C_LATEST, C_NAME, C_MOBILE, C_EMAIL, C_PLAT, "_ninper",
              "New/Follow-Up", C_VALID, C_RELEV, C_REF, C_REFNAME, C_COURSE,
              C_STATUS, C_ADM, C_BACKOUT, C_COUNSEL, C_GMEET, C_WALKSCH]
-LEAD_HEADERS = ["First Enquiry", "Latest Enquiry", "Full Name", "Mobile Number",
-                "Platforms Used", "Interactions",
-                "Relevant", "Is Referral",
-                "Course Interested", "Notes / Remarks", "Admission Status",
-                "Backout Reason", "Counselling By", "Google Meet Sch.", "Walk-in Sch.",
-                "Lead Journey (Enquiry → Latest)", "Lead Information Status"]
+LEAD_HEADERS = ["Lead Journey (Enquiry → Latest)", "Full Name", "Mobile Number",
+                "Is Referral", "City", "Lead Type", "Course Interested",
+                "Notes / Remarks", "Counselling By", "Admission Status", "Relevant",
+                "Platforms Used", "Interactions", "Google Meet Sch.", "Walk-in Sch.",
+                "Lead Information Status"]
 
 
 def format_journey(hist_text):
@@ -713,6 +714,25 @@ def platforms_in_sequence(row):
         if p not in seq:
             seq.append(p)
     return ", ".join(seq) if seq else s(row.get(C_PLAT))
+
+
+def city_of(row):
+    """Combine 'Current Area / Locality' + 'Current City' into one readable 'City'
+    value: each part trimmed with internal runs of whitespace collapsed, joined by
+    ', ' in locality-then-city order. If the two are equal (case-insensitive, after
+    cleansing) only one is kept; blank/None parts are dropped. The result is
+    Title-cased for a proper, readable form (e.g. 'wakad' + 'Pune' -> 'Wakad, Pune';
+    'pune' + 'Pune' -> 'Pune')."""
+    def _clean(v):
+        return re.sub(r"\s+", " ", s(v)).strip()
+    parts = []
+    for p in (_clean(row.get(C_LOCALITY)), _clean(row.get(C_CITY))):
+        if not p:
+            continue
+        if any(p.casefold() == q.casefold() for q in parts):
+            continue
+        parts.append(p)
+    return ", ".join(parts).title()
 
 
 # ── Lead Information Status (IntelliBI completeness) ─────────────────────────
@@ -766,13 +786,15 @@ def lead_detail_rows(tab, leads):
     for a in sorted(leads, key=lambda x: (parse_dt(x.get(C_FIRST)) or datetime.max)):
         plats = platforms_in_sequence(a)
         status = lead_info_status(plats)
+        # Lead Type: reuse the report's existing source/mapping (master 'Lead Type'
+        # column, blank -> the canonical 'Unidentified' label) — no new logic.
+        lead_type = s(a.get(C_LEADTYPE)) or LEAD_TYPE_UNIDENTIFIED
         tab.row([
-            a.get(C_FIRST), a.get(C_LATEST), a.get(C_NAME), a.get(C_MOBILE),
-            plats, a["_ninper"],
-            a.get(C_RELEV), a.get(C_REF),
-            a.get(C_COURSE), a.get(C_REMARKS), a.get(C_ADM), a.get(C_BACKOUT),
-            a.get(C_COUNSEL), a.get(C_GMEET), a.get(C_WALKSCH),
-            format_journey(a.get(C_HIST)), status,
+            format_journey(a.get(C_HIST)), a.get(C_NAME), a.get(C_MOBILE),
+            a.get(C_REF), city_of(a), lead_type, a.get(C_COURSE),
+            a.get(C_REMARKS), a.get(C_COUNSEL), a.get(C_ADM), a.get(C_RELEV),
+            plats, a["_ninper"], a.get(C_GMEET), a.get(C_WALKSCH),
+            status,
         ])
         # Colour ONLY the status cell — Completed=green, Pending=red, bold — so it
         # overrides the row's Fresh/Repeat tint without disturbing other cells.
@@ -844,27 +866,31 @@ def leadtype_share_rows(active, day=None):
     return header, data, total
 
 
+def _a1col(idx0):
+    """0-based column index -> A1 column letters (0->A, 4->E, 26->AA)."""
+    s, n = "", idx0 + 1
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
 def attach_side_table(tab, r0, c0, title, header, data, total):
-    """Write a small standalone table into the grid starting at (row r0, col c0),
-    0-based, WITHOUT disturbing whatever already occupies columns 0..c0-1 on those
-    rows. Values are placed into the existing rows (padded as needed); the block's
-    geometry is recorded on tab.side_tables so the renderers can format it (title /
-    header / alternating band / total) at the offset columns. Additive only."""
-    lines = [[title], list(header)] + [list(d) for d in data] + [list(total)]
+    """Record a small standalone table to be rendered at (row r0, col c0), 0-based,
+    to the RIGHT of an existing section. Its values and formatting are emitted by the
+    renderers straight from tab.side_tables; the neighbouring section's own rows are
+    NOT extended with these cells. Keeping the neighbour's rows at their natural width
+    is what stops that section's fill / borders from bleeding across (and overlapping)
+    this side table. Additive only."""
     width = max(len(header), 1)
-    while len(tab.rows) < r0 + len(lines):
-        tab.blank()
-    for k, cells in enumerate(lines):
-        row = tab.rows[r0 + k]
-        need = c0 + len(cells)
-        if len(row) < need:
-            row.extend([""] * (need - len(row)))
-        for j, v in enumerate(cells):
-            row[c0 + j] = v
     if getattr(tab, "side_tables", None) is None:
         tab.side_tables = []
     tab.side_tables.append({
         "c0": c0, "width": width,
+        "title": str(title),
+        "header": [("" if h is None else h) for h in header],
+        "data": [list(d) for d in data],
+        "total": list(total),
         "title_row": r0, "header_row": r0 + 1,
         "first_data": r0 + 2, "last_data": r0 + 1 + len(data),
         "total_row": r0 + 2 + len(data),
@@ -2311,6 +2337,26 @@ def write_workbook(sheets, spreadsheet_id, tabs):
         spreadsheetId=spreadsheet_id,
         body={"valueInputOption": "RAW", "data": data}).execute()
 
+    # Side tables (e.g. the per-counsellor Lead Type Share Analysis placed to the
+    # right of the Executive Summary) are written separately so they never extend
+    # their neighbour section's rows. This runs AFTER the main block above so the
+    # side values overwrite the blank padding the main array left in those columns.
+    side_data = []
+    for name, tab in tabs.items():
+        for st in getattr(tab, "side_tables", []):
+            w = st["width"]
+            block = [[st["title"]] + [""] * (w - 1), list(st["header"])]
+            block += [list(d) + [""] * (w - len(d)) for d in st["data"]]
+            block.append(list(st["total"]) + [""] * (w - len(st["total"])))
+            side_data.append({
+                "range": "'%s'!%s%d" % (name, _a1col(st["c0"]),
+                                        st["title_row"] + 1),
+                "values": block})
+    if side_data:
+        sheets.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"valueInputOption": "RAW", "data": side_data}).execute()
+
     for idx, (name, tab) in enumerate(tabs.items()):
         sid = existing[name]
         maxw = max(tab.width(), 1)
@@ -2674,6 +2720,21 @@ def write_local_xlsx(path, tabs):
         # main share table, painted at the offset columns.
         for st in getattr(tab, "side_tables", []):
             _c0, _w = st["c0"], st["width"]
+
+            # Write the side-table values here (they are kept out of tab.rows so the
+            # neighbour section's row width — and hence its fill / borders — is never
+            # inflated). ws.cell auto-creates the offset cells without touching cols
+            # 0..c0-1 that the neighbour section owns.
+            def _put_side(ri, cells):
+                for j, v in enumerate(cells):
+                    ws.cell(row=ri + 1, column=_c0 + 1 + j).value = (
+                        "" if v is None else v)
+
+            _put_side(st["title_row"], [st["title"]])
+            _put_side(st["header_row"], st["header"])
+            for _off, _d in enumerate(st["data"]):
+                _put_side(st["first_data"] + _off, _d)
+            _put_side(st["total_row"], st["total"])
 
             def _paint_side(ri, hexbg, fg, is_bold, size=11, bordered=False):
                 for ci in range(_c0 + 1, _c0 + _w + 1):       # openpyxl is 1-based
