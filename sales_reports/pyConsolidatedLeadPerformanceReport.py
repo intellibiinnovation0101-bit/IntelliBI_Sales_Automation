@@ -1169,6 +1169,17 @@ def _active_emails(cfg, section):
     return out
 
 
+def _load_section_active_emails(section):
+    """Active emailids of a single counsellors.json section (live read); [] on any
+    read/parse failure. Used to grant Viewer (read-only) report access."""
+    try:
+        with open(_COUNSELLORS_JSON, encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception:
+        return []
+    return _active_emails(cfg, section)
+
+
 # The per-section field that holds the recipient's display name, used only to
 # personalize the email greeting. Each section carries its own name key.
 _EMAIL_SECTION_NAME_FIELD = {
@@ -1233,6 +1244,11 @@ def load_email_recipients():
 EMAIL_RECIPIENTS, MASK_RECIPIENTS = load_email_recipients()
 # email(lower) -> display name, for the personalized "Hello <name>," greeting.
 EMAIL_NAMES = load_recipient_names()
+# Active counsellors granted Viewer (read-only) access to the FULL report file.
+# (digitalmarketingspecialist recipients are granted Viewer on the MASKED file —
+# they are the masked_recips — and intellibiadmin is intentionally not granted
+# explicit per-file access here.)
+COUNSELLOR_VIEWER_RECIPS = _load_section_active_emails("counsellors")
 
 
 def _counsellor_employed_in_period(c, start, end):
@@ -2367,6 +2383,51 @@ def upload_report_to_drive(drive, folder_id, name, xlsx_path):
     return url, (len(old) == 0), f["id"]
 
 
+def _period_folder_name(label, start, end):
+    """Drive subfolder name for a report period, so every run for that period is
+    grouped together and preserved:
+        Daily   -> 'Daily 20-Sep-2026'
+        Weekly  -> 'Weekly 14-Sep-2026 to 20-Sep-2026'  (week start .. end)
+        Monthly -> 'Monthly Sep-2026'
+    Derived from the report's own period bounds, so it is correct for any date."""
+    if label == "Weekly":
+        return "Weekly %s to %s" % (start.strftime("%d-%b-%Y"), end.strftime("%d-%b-%Y"))
+    if label == "Monthly":
+        return "Monthly %s" % start.strftime("%b-%Y")
+    if label == "Daily":
+        return "Daily %s" % start.strftime("%d-%b-%Y")
+    return label
+
+
+def ensure_drive_subfolder(drive, parent_id, name):
+    """Find (or create) a subfolder `name` under parent_id and return its id. Reused
+    across runs so all reports for the same day/week/month land in one folder. On any
+    lookup/create failure, falls back to parent_id so the report is still uploaded."""
+    safe = name.replace("'", "\\'")
+    try:
+        res = drive.files().list(
+            q=("name = '%s' and '%s' in parents and "
+               "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+               % (safe, parent_id)),
+            fields="files(id)", pageSize=1,
+            supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+        hits = res.get("files", [])
+        if hits:
+            return hits[0]["id"]
+    except Exception as e:
+        print("  [drive] could not look up subfolder %r:" % name, e)
+    try:
+        f = drive.files().create(
+            body={"name": name, "parents": [parent_id],
+                  "mimeType": "application/vnd.google-apps.folder"},
+            fields="id", supportsAllDrives=True).execute()
+        print("  [drive] created subfolder:", name)
+        return f["id"]
+    except Exception as e:
+        print("  [drive] could not create subfolder %r:" % name, e)
+        return parent_id
+
+
 def share_file_with(drive, file_id, emails, role="writer"):
     """Grant `role` (default Editor/writer) on a Drive file to one or more email
     addresses. Best-effort per address; failures are logged, never fatal. No
@@ -2381,9 +2442,9 @@ def share_file_with(drive, file_id, emails, role="writer"):
                 body={"type": "user", "role": role, "emailAddress": em},
                 sendNotificationEmail=False,
                 supportsAllDrives=True).execute()
-            print(f"  [drive] shared masked report with {em} ({role})")
+            print(f"  [drive] shared report with {em} ({role})")
         except Exception as e:
-            print(f"  [drive] could NOT share masked report with {em}:", e)
+            print(f"  [drive] could NOT share report with {em}:", e)
 
 
 def write_workbook(sheets, spreadsheet_id, tabs):
@@ -3410,12 +3471,20 @@ def run():
                      f"Monthly Lead Report - {ms.strftime('%b %Y')}",
                      "Monthly Lead Report"))
 
+    # One run timestamp shared by every report produced in THIS run, appended to
+    # each filename so repeated Daily/Weekly/Monthly runs each create a SEPARATE
+    # file and never overwrite a previously generated report.
+    run_suffix = now_ist().strftime(" _%I.%M.%S %p")
+
     for label, rng, st, en, folder, fname, subject, link_name in jobs:
         tabs, active = build_report(label, rng, df, st, en)
         print(f"\n{label} report | {rng} | active leads: {len(active)} | tabs: {len(tabs)}")
 
+        # Timestamped filename (this run) — keeps every generated report distinct.
+        fname_ts = fname + run_suffix
+
         # styled .xlsx is both the local backup AND the file uploaded to Drive.
-        xlsx_path = os.path.join(OUTPUT_DIR, fname + ".xlsx")
+        xlsx_path = os.path.join(OUTPUT_DIR, fname_ts + ".xlsx")
         xlsx_ok = False
         try:
             write_local_xlsx(xlsx_path, tabs)
@@ -3437,7 +3506,7 @@ def run():
         if masked_recips:
             df_masked = mask_dataframe(df)
             tabs_m, active_m = build_report(label, rng, df_masked, st, en)
-            masked_xlsx_path = os.path.join(OUTPUT_DIR, fname + " (Masked).xlsx")
+            masked_xlsx_path = os.path.join(OUTPUT_DIR, fname_ts + " (Masked).xlsx")
             try:
                 write_local_xlsx(masked_xlsx_path, tabs_m)
                 print(f"  local xlsx (masked): {masked_xlsx_path}")
@@ -3450,20 +3519,30 @@ def run():
         if not (xlsx_ok and os.path.exists(xlsx_path)):
             print("  [drive] no xlsx to upload — skipping this report.")
             continue
+        # Per-period Drive subfolder (e.g. "Daily 20-Sep-2026",
+        # "Weekly 14-Sep-2026 to 20-Sep-2026", "Monthly Sep-2026") so every run for
+        # that day/week/month is grouped and preserved together. Reused if present.
+        upload_folder = ensure_drive_subfolder(drive, folder,
+                                                _period_folder_name(label, st, en))
         # Upload the styled .xlsx to Drive as a Google Sheet (drive scope only).
-        url, created, _fid = upload_report_to_drive(drive, folder, fname, xlsx_path)
+        url, created, _fid = upload_report_to_drive(drive, upload_folder, fname_ts, xlsx_path)
         print(f"  {'created' if created else 'replaced'}: {url}")
+
+        # Active counsellors get Viewer (read-only) access to the FULL report file
+        # directly, so the link works for them regardless of the folder's sharing.
+        if COUNSELLOR_VIEWER_RECIPS:
+            share_file_with(drive, _fid, COUNSELLOR_VIEWER_RECIPS, role="reader")
 
 
         # Upload the masked copy (separate file) for the masking recipients, and
-        # share THAT file with them directly as Editor so the link works for them
-        # regardless of the folder's sharing (other recipients are unaffected).
+        # share THAT file with them directly as Viewer (read-only) so the link works
+        # for them regardless of the folder's sharing (other recipients unaffected).
         url_masked = None
         if masked_recips and masked_xlsx_path and os.path.exists(masked_xlsx_path):
             url_masked, _mc, masked_fid = upload_report_to_drive(
-                drive, folder, fname + " (Masked)", masked_xlsx_path)
+                drive, upload_folder, fname_ts + " (Masked)", masked_xlsx_path)
             print(f"  masked copy: {url_masked}")
-            share_file_with(drive, masked_fid, masked_recips, role="writer")
+            share_file_with(drive, masked_fid, masked_recips, role="reader")
 
         # One professional email per report, with its own subject + named link.
         # Normal recipients get the full report; masking recipients get the

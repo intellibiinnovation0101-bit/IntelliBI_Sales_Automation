@@ -629,6 +629,25 @@ def resolve_output_folder(drive, parent_id, subfolder_name):
     return meta["id"]
 
 
+def _period_folder_name(label, start, end):
+    """Date-wise subfolder name for a report period, so every run for that period is
+    grouped together and preserved (nested inside the report's type folder):
+        Daily   -> 'Daily 20-Sep-2026'
+        Weekly  -> 'Weekly 14-Sep-2026 to 20-Sep-2026'
+        Monthly -> 'Monthly Sep-2026'
+        Manual  -> 'Manual 01-Sep-2026 to 15-Sep-2026'
+    Derived from the report's own period bounds, so it is correct for any date."""
+    if label == "Weekly":
+        return "Weekly %s to %s" % (start.strftime("%d-%b-%Y"), end.strftime("%d-%b-%Y"))
+    if label == "Monthly":
+        return "Monthly %s" % start.strftime("%b-%Y")
+    if label == "Manual":
+        return "Manual %s to %s" % (start.strftime("%d-%b-%Y"), end.strftime("%d-%b-%Y"))
+    if label == "Daily":
+        return "Daily %s" % start.strftime("%d-%b-%Y")
+    return label
+
+
 def upload_report_to_drive(drive, folder_id, name, xlsx_path):
     """Upload the styled .xlsx into the folder as a Google Sheet, replacing any
     same-named file. Drive scope only (impersonated). Returns (url, created,
@@ -3898,6 +3917,9 @@ def run():
                          f"Lead Follow-Up Analysis - Manual - {ms.strftime('%d-%b-%Y')} "
                          f"to {me.strftime('%d-%b-%Y')}"))
 
+    # One run timestamp appended to every filename so repeated Daily/Weekly/Monthly/
+    # Manual runs each create a SEPARATE file and never overwrite a previous report.
+    run_suffix = now_ist().strftime(" _%I.%M.%S %p")
     folder_cache = {}
     for label, rng, st, en, fname in jobs:
         # re-derive follow-ups for THIS period's cutoff + windows.
@@ -4063,7 +4085,9 @@ def run():
               f"GMeet {gm_metrics['total']} Walk {wk_metrics['total']} | "
               f"tabs: {len(tabs)}")
 
-        xlsx_path = os.path.join(OUTPUT_DIR, fname + ".xlsx")
+        # Timestamped filename (this run) — keeps every generated report distinct.
+        fname_ts = fname + run_suffix
+        xlsx_path = os.path.join(OUTPUT_DIR, fname_ts + ".xlsx")
         try:
             write_local_xlsx(xlsx_path, tabs)
             print(f"  local xlsx: {xlsx_path}")
@@ -4076,9 +4100,17 @@ def run():
         if sub_name not in folder_cache:
             folder_cache[sub_name] = resolve_output_folder(
                 drive, OUTPUT_PARENT_FOLDER_ID, sub_name)
-        target_folder = folder_cache[sub_name]
-        url, created, _fid = upload_report_to_drive(drive, target_folder, fname, xlsx_path)
-        print(f"  -> {sub_name}  {'created' if created else 'replaced'}: {url}")
+        type_folder = folder_cache[sub_name]
+        # Per-period date-wise subfolder nested inside the type folder (e.g.
+        # "Daily 20-Sep-2026", "Weekly 14-Sep-2026 to 20-Sep-2026",
+        # "Monthly Sep-2026"), so every run for that period is grouped and preserved.
+        period_name = _period_folder_name(label, st, en)
+        _pkey = (sub_name, period_name)
+        if _pkey not in folder_cache:
+            folder_cache[_pkey] = resolve_output_folder(drive, type_folder, period_name)
+        target_folder = folder_cache[_pkey]
+        url, created, _fid = upload_report_to_drive(drive, target_folder, fname_ts, xlsx_path)
+        print(f"  -> {sub_name}/{period_name}  {'created' if created else 'replaced'}: {url}")
 
         # ── Email the summary (same config/format as the consolidated report) ──
         # Values below are the EXACT figures shown on this report's Summary tab.
@@ -4098,12 +4130,12 @@ def run():
             # as Editor. The original full report is never modified.
             url_masked = None
             if masked_recips:
-                masked_xlsx_path = os.path.join(OUTPUT_DIR, fname + " (Masked).xlsx")
+                masked_xlsx_path = os.path.join(OUTPUT_DIR, fname_ts + " (Masked).xlsx")
                 try:
                     write_local_xlsx(masked_xlsx_path, mask_tabs(tabs))
                     if os.path.exists(masked_xlsx_path):
                         url_masked, _mc, masked_fid = upload_report_to_drive(
-                            drive, target_folder, fname + " (Masked)", masked_xlsx_path)
+                            drive, target_folder, fname_ts + " (Masked)", masked_xlsx_path)
                         print(f"  masked copy: {url_masked}")
                         share_file_with(drive, masked_fid, masked_recips, role="writer")
                 except Exception as e:
