@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+
 IntelliBI - Consolidated Lead Performance Report
 ================================================
 
@@ -85,19 +86,17 @@ if _SCHED_TRIGGER_TIME:
 
 # Email the report links to management?  True / False
 SEND_EMAIL       = True
-EMAIL_RECIPIENTS = [
-    "harishintellibi@gmail.com",
-    "salesintellibi01@gmail.com",
-    "info@intellibiinnovationstechnologies.in",
-    "salesintellibi03@gmail.com",
-    "163manish.sharma@gmail.com"
-]
 
-# Recipients who must receive a MASKED copy of the report — every lead's Mobile
-# Number and Email ID are masked in THEIR copy only. Everyone else gets the full,
-# unmasked report exactly as before. Compared case-insensitively. Masking is done
+# Email recipients are NO LONGER hardcoded — they are built LIVE from
+# config/counsellors.json (Active records only) by load_email_recipients(), which
+# populates EMAIL_RECIPIENTS and MASK_RECIPIENTS further below (once the config
+# path CONFIG_DIR / _COUNSELLORS_JSON is available). Section rules:
+#   • counsellors, intellibiadmin  -> normal recipients (full, unmasked report)
+#   • digitalmarketingspecialist   -> MASKED copy (same masking logic as before)
+# MASK_RECIPIENTS keeps its original meaning: the set of addresses that receive the
+# masked copy — every lead's Mobile Number and Email ID masked in THEIR copy only,
 # on a separate copy of the data; the source/original report is never modified.
-MASK_RECIPIENTS = {"163manish.sharma@gmail.com"}
+# Comparison downstream stays case-insensitive.
 
 # ---- Source ----
 MASTER_SHEET_ID = "1zZQjXnMJD96Ca0MNyfSt4-XS0z5w3rT7WPdb9qsP1Gs"   # Consolidated Master Lead
@@ -1144,6 +1143,96 @@ NAVY_HEX  = "1B355E"                  # default (non-colour-coded) email KPI val
 # metric's colour logic is unchanged.
 _FRESH_TARGET_FALLBACK = 15           # legacy threshold; used ONLY if config unreadable
 _COUNSELLORS_JSON = os.path.join(CONFIG_DIR, "counsellors.json")
+
+
+# ── Email recipients, built LIVE from config/counsellors.json ────────────────
+# Address field on each record is "emailid"; only current_status == "Active"
+# records are used. Sections map to send-mode:
+#   counsellors, intellibiadmin      -> normal (full, unmasked) report
+#   digitalmarketingspecialist       -> masked copy (existing masking logic)
+_EMAIL_SECTIONS_NORMAL = ("counsellors", "intellibiadmin")
+_EMAIL_SECTIONS_MASKED = ("digitalmarketingspecialist",)
+
+
+def _active_emails(cfg, section):
+    """Trimmed 'emailid' of every Active record in `section` of the counsellors.json
+    config dict, in file order, dropping blanks and case-insensitive duplicates."""
+    out, seen = [], set()
+    for rec in (cfg.get(section) or []):
+        if str(rec.get("current_status", "")).strip().lower() != "active":
+            continue
+        em = str(rec.get("emailid", "")).strip()
+        if not em or em.lower() in seen:
+            continue
+        seen.add(em.lower())
+        out.append(em)
+    return out
+
+
+# The per-section field that holds the recipient's display name, used only to
+# personalize the email greeting. Each section carries its own name key.
+_EMAIL_SECTION_NAME_FIELD = {
+    "counsellors": "counsellor_name",
+    "digitalmarketingspecialist": "digital_marketing_specialist_name",
+    "intellibiadmin": "intellibi_admin_name",
+}
+
+
+def load_recipient_names():
+    """{emailid.lower(): display_name} for every Active record across all sections,
+    each name read from that section's own name field. Used only to personalize the
+    email greeting; returns {} on any read/parse failure so the greeting simply
+    falls back to 'Hello Team,'."""
+    try:
+        with open(_COUNSELLORS_JSON, encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception:
+        return {}
+    names = {}
+    for sec, name_field in _EMAIL_SECTION_NAME_FIELD.items():
+        for rec in (cfg.get(sec) or []):
+            if str(rec.get("current_status", "")).strip().lower() != "active":
+                continue
+            em = str(rec.get("emailid", "")).strip().lower()
+            nm = str(rec.get(name_field, "")).strip()
+            if em and nm and em not in names:
+                names[em] = nm
+    return names
+
+
+def load_email_recipients():
+    """(all_recipients, mask_set) built LIVE from config/counsellors.json:
+        • all_recipients — Active emailids across counsellors + intellibiadmin
+          (normal) then digitalmarketingspecialist (masked), de-duped in that order.
+        • mask_set — the Active emailids under digitalmarketingspecialist only;
+          these get the masked copy via the unchanged masking logic downstream.
+    Returns ([], set()) on any read/parse failure so a broken config sends to no one
+    rather than crashing the run."""
+    try:
+        with open(_COUNSELLORS_JSON, encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception as e:
+        print("  [email] could NOT read counsellors.json for recipients:", e)
+        return [], set()
+    normal, masked = [], []
+    for sec in _EMAIL_SECTIONS_NORMAL:
+        normal += _active_emails(cfg, sec)
+    for sec in _EMAIL_SECTIONS_MASKED:
+        masked += _active_emails(cfg, sec)
+    seen, all_recips = set(), []
+    for em in normal + masked:
+        if em.lower() not in seen:
+            seen.add(em.lower())
+            all_recips.append(em)
+    return all_recips, {m.lower() for m in masked}
+
+
+# Populate the module-level recipient constants once at import (before any report
+# job runs). Downstream code (send_email default, and the masked/normal split in
+# the main loop) is unchanged — only the source of these addresses moved here.
+EMAIL_RECIPIENTS, MASK_RECIPIENTS = load_email_recipients()
+# email(lower) -> display name, for the personalized "Hello <name>," greeting.
+EMAIL_NAMES = load_recipient_names()
 
 
 def _counsellor_employed_in_period(c, start, end):
@@ -3081,9 +3170,11 @@ def send_email(subject, html_body, recipients=None):
 
 
 def build_email_body(report_type, period_range, url, link_name, active, gen_stamp,
-                     start=None, end=None):
+                     start=None, end=None, greeting_name=None):
     """Professional, self-contained HTML email: intro, period, KPI snapshot,
-    a named call-to-action link, and the IntelliBI signature."""
+    a named call-to-action link, and the IntelliBI signature. greeting_name, when
+    given, personalizes the opening line to 'Hello <name>,' (name bold + slightly
+    larger); otherwise the original 'Hello Team,' is used."""
     es = exec_summary(active)
 
     def val(metric):
@@ -3211,6 +3302,16 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
             + _bar("Google Meet &amp; Walk-In %", f"{meet_walk_pct:.0f}%", meet_walk_pct,
                    meet_walk_hex, 80, "Goal: 80%"))
 
+    # Personalized greeting: the recipient's name (bold, slightly larger) when
+    # provided, else the original "Hello Team,". Name is minimally HTML-escaped
+    # since it originates from config.
+    _nm = str(greeting_name or "").strip()
+    if _nm:
+        _nm_html = _nm.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        _greet = f'Hello <b style="font-size:18px">{_nm_html}</b>,'
+    else:
+        _greet = "Hello Team,"
+
     return f"""<html><body style="margin:0;padding:24px;background:#eef2f8;
   font-family:'Segoe UI',Roboto,Arial,sans-serif;color:#1a2a48">
   <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:10px;
@@ -3220,7 +3321,7 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
       <div style="font-size:13px;opacity:.85;margin-top:4px">Reporting Period: {period_range}</div>
     </div>
     <div style="padding:22px 28px">
-      <p style="margin:0 0 14px">Hello Team,</p>
+      <p style="margin:0 0 14px">{_greet}</p>
       <p style="margin:0 0 4px;line-height:1.5">
         Please find the <b>{report_type}</b> lead-performance report for
         <b>{period_range}</b>. Here is a quick snapshot:</p>
@@ -3369,18 +3470,26 @@ def run():
         # masked copy — same subject/body, only the linked report differs.
         if SEND_EMAIL:
             gen_stamp = now_ist().strftime("%d-%b-%Y %I:%M %p") + " IST"
+            # Sent one-per-recipient so each greeting can carry that person's name
+            # (from counsellors.json). The report each recipient receives is
+            # unchanged: normal recipients get the full report, masked recipients
+            # get the masked copy — only the greeting differs per person.
             if normal_recips:
-                send_email(subject,
-                           build_email_body(label, rng, url, link_name, active,
-                                            gen_stamp, start=st, end=en),
-                           normal_recips)
+                for _rcpt in normal_recips:
+                    send_email(subject,
+                               build_email_body(label, rng, url, link_name, active,
+                                                gen_stamp, start=st, end=en,
+                                                greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                               [_rcpt])
             if masked_recips:
                 if url_masked:
-                    send_email(subject,
-                               build_email_body(label, rng, url_masked, link_name,
-                                                active_m if active_m is not None else active,
-                                                gen_stamp, start=st, end=en),
-                               masked_recips)
+                    for _rcpt in masked_recips:
+                        send_email(subject,
+                                   build_email_body(label, rng, url_masked, link_name,
+                                                    active_m if active_m is not None else active,
+                                                    gen_stamp, start=st, end=en,
+                                                    greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                                   [_rcpt])
                 else:
                     # Never send the FULL report to a masking recipient. If the
                     # masked copy couldn't be produced/uploaded, skip them.

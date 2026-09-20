@@ -56,8 +56,8 @@
   ],
   "intellibiadmin": [
     {
-      "digital_marketing_specialist_id": "IA001",
-      "digital_marketing_specialist_name": "IntelliBI Admin",
+      "intellibi_admin_id": "IA001",
+      "intellibi_admin_name": "IntelliBI Director",
       "rank": 1,
       "office_number": "7498756891",
 	  "emailid": "info@intellibiinnovationstechnologies.in",
