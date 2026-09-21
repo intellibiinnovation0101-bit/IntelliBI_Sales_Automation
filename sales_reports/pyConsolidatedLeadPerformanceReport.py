@@ -123,6 +123,23 @@ import _bootstrap  # noqa: E402  (sys.path + env defaults + config.yaml)
 from paths import CREDENTIALS_DIR, CONFIG_DIR, LOGS_DIR  # noqa: E402
 # --- end bootstrap ---
 
+# Reuse the EXACT conversion model + banding from the Follow-Up report — never a
+# separate copy — so the Conversion Chance %, Priority and colours stay identical
+# across both reports. lfa.conversion_scores_for_master() trains the one shared
+# model; lfa.BAND_RGB/BAND_HEX give the same priority colours; lfa._priority_mix_rows
+# gives the same Lead Priority Mix calculation.
+import pyLeadFollowUpAnalysisReport as lfa  # noqa: E402
+
+# Trained conversion bands for THIS run (Hot/Warm/Nurture/Low-Intent thresholds),
+# set once in run(); read by the Lead Priority Mix. None until run() populates it.
+ML_BANDS = None
+# Helper columns attached to the master DataFrame in run() carrying each lead's
+# Conversion Chance % and Priority from the shared model. They ride along through
+# prepare_active() and even mask_dataframe() (which only masks phone/email), so the
+# scores stay attached to every lead in every tab and in the masked copy.
+ML_CHANCE_COL = "_ML_CHANCE"
+ML_PRIORITY_COL = "_ML_PRIORITY"
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVICE_ACCOUNT_FILE = os.environ.get(
     "GOOGLE_SERVICE_ACCOUNT_FILE",
@@ -677,7 +694,8 @@ def course_breakdown(active):
 LEAD_COLS = [C_FIRST, C_LATEST, C_NAME, C_MOBILE, C_EMAIL, C_PLAT, "_ninper",
              "New/Follow-Up", C_VALID, C_RELEV, C_REF, C_REFNAME, C_COURSE,
              C_STATUS, C_ADM, C_BACKOUT, C_COUNSEL, C_GMEET, C_WALKSCH]
-LEAD_HEADERS = ["Lead Journey (Enquiry → Latest)", "Full Name", "Mobile Number",
+LEAD_HEADERS = ["Rank", "Priority", "Conversion Chance %",
+                "Lead Journey (Enquiry → Latest)", "Full Name", "Mobile Number",
                 "Is Referral", "City", "Lead Type", "Course Interested",
                 "Notes / Remarks", "Counselling By", "Admission Status", "Relevant",
                 "Platforms Used", "Interactions", "Google Meet Sch.", "Walk-in Sch.",
@@ -777,27 +795,52 @@ def lead_completion_pct(leads):
     return completed / total * 100.0, completed, total
 
 
+def _ml_chance_of(a):
+    """This lead's Conversion Chance % as a float (from the shared model attached
+    to the row in run()), or -1.0 when unavailable so it sorts to the bottom."""
+    v = s(a.get(ML_CHANCE_COL))
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return -1.0
+
+
 def lead_detail_rows(tab, leads):
     tab.header(LEAD_HEADERS, filterable=True)
     status_ci = len(LEAD_HEADERS) - 1     # 0-based col index of Lead Information Status
-    # Sort every lead-detail tab by the First Enquiry datetime, ascending
-    # (oldest first). Uses the parsed datetime, not text; blanks sort last.
-    for a in sorted(leads, key=lambda x: (parse_dt(x.get(C_FIRST)) or datetime.max)):
+    if getattr(tab, "row_fills", None) is None:
+        tab.row_fills = {}
+    # Rank every lead-detail tab by Conversion Chance % (highest first), so Rank
+    # runs 1,2,3… down the page — the SAME ranking the Follow-Up report uses in
+    # its Priority & Actions tab. Ties fall back to First Enquiry (oldest first).
+    ordered = sorted(leads, key=lambda x: (-_ml_chance_of(x),
+                                           parse_dt(x.get(C_FIRST)) or datetime.max))
+    for rank, a in enumerate(ordered, 1):
         plats = platforms_in_sequence(a)
         status = lead_info_status(plats)
         # Lead Type: reuse the report's existing source/mapping (master 'Lead Type'
         # column, blank -> the canonical 'Unidentified' label) — no new logic.
         lead_type = s(a.get(C_LEADTYPE)) or LEAD_TYPE_UNIDENTIFIED
+        chance = _ml_chance_of(a)
+        priority = s(a.get(ML_PRIORITY_COL))
+        chance_disp = f"{chance:.1f}%" if chance >= 0 else "—"
+        rank_disp = rank if chance >= 0 else ""
         tab.row([
+            rank_disp, priority or "—", chance_disp,
             format_journey(a.get(C_HIST)), a.get(C_NAME), a.get(C_MOBILE),
             a.get(C_REF), city_of(a), lead_type, a.get(C_COURSE),
             a.get(C_REMARKS), a.get(C_COUNSEL), a.get(C_ADM), a.get(C_RELEV),
             plats, a["_ninper"], a.get(C_GMEET), a.get(C_WALKSCH),
             status,
         ])
-        # Colour ONLY the status cell — Completed=green, Pending=red, bold — so it
-        # overrides the row's Fresh/Repeat tint without disturbing other cells.
         _ri = len(tab.rows) - 1
+        # Tint the WHOLE row with this lead's Conversion-Chance PRIORITY band
+        # (Hot=green, Warm=yellow, Nurture=orange, Low-Intent=red) — the SAME colour
+        # code as the Follow-Up report — taken from the actual Priority value.
+        if priority in lfa.BAND_RGB:
+            tab.row_fills[_ri] = (lfa.BAND_RGB[priority], lfa.BAND_HEX[priority])
+        # The status cell is overridden on top (Completed=green / Pending=red) so it
+        # stays legible over the band tint.
         tab.cell_fills[(_ri, status_ci)] = ((CLR_GREEN, HEX["GREEN"])
                                             if status == "Completed"
                                             else (CLR_RED, HEX["RED"]))
@@ -894,6 +937,40 @@ def attach_side_table(tab, r0, c0, title, header, data, total):
         "first_data": r0 + 2, "last_data": r0 + 1 + len(data),
         "total_row": r0 + 2 + len(data),
     })
+
+
+def _add_lead_priority_mix(t, leads):
+    """Render 'Lead Priority Mix (by Conversion Chance %)' onto tab `t`, scoped to
+    `leads`. Reuses the Follow-Up report's EXACT calculation (lfa._priority_mix_rows:
+    mobile/email de-duplication, per-band counts, % of active, chance range, avg)
+    and the SAME band colours — no duplicate logic. Safe when the model produced no
+    scores (renders the bands with zero counts)."""
+    bands = ML_BANDS if ML_BANDS is not None else lfa.priority_bands(0.05)
+    # Adapt each active lead to the shape lfa._priority_mix_rows expects.
+    mix_src = []
+    for a in leads:
+        prio = s(a.get(ML_PRIORITY_COL))
+        if not prio:
+            continue
+        try:
+            ch = float(s(a.get(ML_CHANCE_COL)))
+        except (TypeError, ValueError):
+            ch = 0.0
+        mix_src.append({"priority": prio, "conversion_chance": ch,
+                        "mobile": a.get(C_MOBILE, ""), "email": a.get(C_EMAIL, "")})
+    if getattr(t, "row_fills", None) is None:
+        t.row_fills = {}
+    t.title("Lead Priority Mix (by Conversion Chance %)")
+    t.header(["Priority", "Leads", "% of Active", "Conversion-Chance Range", "Avg Chance"])
+    for mrow in lfa._priority_mix_rows(mix_src, bands):
+        t.row(mrow)
+        # Tint each band row across its full width with that band's colour
+        # (Hot=green, Warm=yellow, Nurture=orange, Low-Intent=red) — the SAME colour
+        # code as the Follow-Up report.
+        band = str(mrow[0])
+        if band in lfa.BAND_RGB:
+            t.row_fills[len(t.rows) - 1] = (lfa.BAND_RGB[band], lfa.BAND_HEX[band])
+    t.blank()
 
 
 def build_summary_tab(period_label, period_range, active, gen_stamp,
@@ -1024,6 +1101,13 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
     for r in crows:
         t.row(r)
     t.blank()
+
+    # ── Lead Priority Mix (by Conversion Chance %) ───────────────────────────
+    # The SAME report as the Follow-Up report's Summary: per-band breakdown over the
+    # unique (mobile/email de-duplicated) active leads, using the identical bands,
+    # buckets, calculation (lfa._priority_mix_rows), structure and colours. Placed
+    # directly below Counsellor Performance.
+    _add_lead_priority_mix(t, active)
 
     t.title("Course Interest")
     t.header(["Course Interested In", "Leads"])
@@ -2216,7 +2300,13 @@ def _row_conditional_rgb(rowvals):
     """Whole-row fill colour: the %-traffic-light category takes precedence
     (green/orange/red), then a Fresh/Repeat lead-type tint. None -> no colour.
     For 'lower-is-better' metrics (Invalid Phone / Irrelevant) the %-colouring is
-    inverted so a low percentage reads green and a high one reads red."""
+    inverted so a low percentage reads green and a high one reads red.
+
+    NB: the lead-detail tabs and the Lead Priority Mix colour their rows by the
+    Conversion-Chance PRIORITY band via an explicit row_fills entry (set where the
+    row is built), so the band colour is taken from the actual Priority value — not
+    guessed from any cell — and can never be triggered by a stray 'Hot'/'Warm' in
+    another column."""
     inverse = bool(rowvals) and str(rowvals[0]).strip() in INVERSE_PCT_METRICS
     for v in rowvals:
         pv = _pct_value(v)
@@ -3442,6 +3532,28 @@ def run():
     else:
         print(f"Enrolled-student exclusion: {len(enrolled)} enrolled mobile(s) "
               f"loaded — no rows removed.")
+
+    # ── Conversion Chance % / Priority from the SHARED model ─────────────────
+    # Train the ONE conversion model (identical to the Follow-Up report) and attach
+    # each lead's Conversion Chance % and Priority to the DataFrame, keyed by the
+    # same 10-digit mobile the model uses. Attaching them as columns means they ride
+    # through prepare_active() and mask_dataframe() into every tab and the masked
+    # copy. Never fatal: any failure leaves the columns blank (rows show "—").
+    global ML_BANDS
+    try:
+        _scores, ML_BANDS, _base = lfa.conversion_scores_for_master(sheets, OUTPUT_DIR)
+        print(f"Conversion model: {len(_scores)} leads scored; "
+              f"base rate {_base*100:.2f}%.")
+        if C_MOBILE in df.columns:
+            _k = df[C_MOBILE].map(lambda v: lfa.digits10(v))
+            df[ML_CHANCE_COL] = _k.map(lambda m: _scores.get(m, {}).get("conversion_chance", ""))
+            df[ML_PRIORITY_COL] = _k.map(lambda m: _scores.get(m, {}).get("priority", ""))
+    except Exception as _e:
+        print("  [ml] conversion scoring skipped (columns left blank):", _e)
+        ML_BANDS = ML_BANDS or lfa.priority_bands(0.05)
+        if C_MOBILE in df.columns:
+            df[ML_CHANCE_COL] = ""
+            df[ML_PRIORITY_COL] = ""
 
     # each job: (label, rng, start, end, folder_id, filename, subject, link_name)
     jobs = []
