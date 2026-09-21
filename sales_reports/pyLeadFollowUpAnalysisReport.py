@@ -4156,7 +4156,8 @@ def send_email(subject, html_body, recipients=None):
 def build_lfa_email_body(report_type, period_range, url, link_name, gen_stamp,
                          fu_pending, fu_done, fu_remaining,
                          gm_sched, gm_att, gm_showoff,
-                         wk_sched, wk_att, wk_showoff, greeting_name=None):
+                         wk_sched, wk_att, wk_showoff, greeting_name=None,
+                         counsellor_goals=None):
     """Professional, self-contained HTML email in the SAME style as the
     consolidated report: header bar, KPI cards, a named call-to-action link, and
     the IntelliBI signature. Cards show the Follow-Up / Google Meet / Walk-In
@@ -4202,6 +4203,69 @@ def build_lfa_email_body(report_type, period_range, url, link_name, gen_stamp,
         ("Total Walk-In Show Off", wk_showoff, NAVY),
         ("Total Walk-In Attended %", wk_att_pct, NAVY)])
 
+    # ── Performance vs Goals — Follow-Ups Done vs the 90% goal ──────────────
+    # Same bar-graph presentation and green/red goal approach as the
+    # consolidated report's "Performance vs Goals": a horizontal progress bar
+    # per row with a marker at the 90% goal. Overall first (Summary tab's Total
+    # Follow-Up Pending vs Total Follow-Up Done), then each counsellor by name
+    # using their existing Total Follow-Up Pending vs Total Follow-Up Done. Only
+    # the already-computed values are displayed — nothing is recalculated.
+    # Target 90%: completion >= 90% -> green, otherwise red.
+    GOAL_PCT = 90
+    GOAL_GREEN_HEX = "217A26"   # matches the consolidated report's TXT_GREEN_HEX
+    GOAL_RED_HEX = "C71C1C"     # matches the consolidated report's TXT_RED_HEX
+
+    def _goal_hex(p):
+        return GOAL_GREEN_HEX if p >= GOAL_PCT else GOAL_RED_HEX
+
+    def _sec_bars(title):
+        return ("<div style='font-size:11px;font-weight:700;letter-spacing:.06em;"
+                "text-transform:uppercase;color:#5b6b86;margin:18px 0 8px;"
+                "padding-bottom:5px;border-bottom:1px solid #e2e8f0'>"
+                f"{title}</div>")
+
+    def _bar(name, value_label, p, hexc, goal_pct, note):
+        p = max(0.0, min(100.0, p))
+        goal = (f"<div style='position:absolute;top:-2px;bottom:-2px;"
+                f"left:{goal_pct:.0f}%;width:2px;background:#33415580'></div>"
+                ) if goal_pct else ""
+        return (
+            "<div style='margin:11px 0'>"
+            "<table role='presentation' width='100%' style='border-collapse:collapse'><tr>"
+            f"<td style='font-size:13px;color:#1a2a48'>{name}</td>"
+            f"<td style='font-size:13px;font-weight:700;color:#{hexc};"
+            f"text-align:right'>{value_label}</td>"
+            "</tr></table>"
+            "<div style='height:12px;border-radius:999px;background:#eef1f6;"
+            "position:relative;overflow:hidden;margin-top:5px'>"
+            f"<div style='height:100%;border-radius:999px;background:#{hexc};"
+            f"width:{p:.0f}%'></div>"
+            f"{goal}</div>"
+            f"<div style='font-size:10.5px;color:#5b6b86;margin-top:3px'>{note}</div></div>")
+
+    def _bar_esc(s):
+        return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    _note = "Goal: 90% Follow-Ups Done"
+    # Counsellor rows: only those with pending follow-ups (a completion ratio
+    # exists); highest completion first, then most pending, then name.
+    _cg = [c for c in (counsellor_goals or []) if (c.get("fup_pend") or 0) > 0]
+    _cg.sort(key=lambda c: (-(100.0 * c["fup_done"] / c["fup_pend"]),
+                            -c["fup_pend"], str(c.get("counsellor") or "")))
+    if fu_pending or _cg:
+        _ov_pct = (100.0 * fu_done / fu_pending) if fu_pending else 0.0
+        perf = _sec_bars("Performance vs Goals &middot; Follow-Ups Done (Goal 90%)")
+        perf += _bar("Overall Follow-Up",
+                     f"{fu_done} / {fu_pending} &middot; {_ov_pct:.0f}%",
+                     _ov_pct, _goal_hex(_ov_pct), GOAL_PCT, _note)
+        for c in _cg:
+            _cp = 100.0 * c["fup_done"] / c["fup_pend"]
+            perf += _bar(_bar_esc(c.get("counsellor") or "—"),
+                         f"{c['fup_done']} / {c['fup_pend']} &middot; {_cp:.0f}%",
+                         _cp, _goal_hex(_cp), GOAL_PCT, _note)
+    else:
+        perf = ""
+
     if url:
         cta = (f"<p style='text-align:center;margin:6px 0 24px'>"
                f"<a href='{url}' style='background:#2B547E;color:#ffffff;"
@@ -4241,6 +4305,7 @@ def build_lfa_email_body(report_type, period_range, url, link_name, gen_stamp,
       {fu}
       {gm}
       {wk}
+      {perf}
       {cta}
       <p style="margin:26px 0 0;line-height:1.5">
         Thanks &amp; Regards,<br><b>IntelliBI Automation Team</b></p>
@@ -4662,6 +4727,20 @@ def run():
             _fu = (total_pending, done_count, remaining_count)
             _gm = (gm_metrics["total"], gm_metrics["attended"], gm_metrics["showoff"])
             _wk = (wk_metrics["total"], wk_metrics["attended"], wk_metrics["showoff"])
+            # Per-counsellor Follow-Up Pending vs Done for the email's
+            # "Performance vs Goals" bars — reuse the EXACT scorecard the
+            # Counsellor Performance tab uses (same pending dataset + meet/walk
+            # records), so the values match the report 1:1. Display only; no
+            # recalculation of any follow-up metric.
+            try:
+                _perf_goals = [
+                    {"counsellor": _sc["counsellor"],
+                     "fup_pend": _sc["fup_pend"], "fup_done": _sc["fup_done"]}
+                    for _sc in counsellor_scorecard(pending_dataset, meetwalk_records)
+                ]
+            except Exception as _e:
+                print("  [email] counsellor goals unavailable:", _e)
+                _perf_goals = []
 
             # Restricted recipient(s): build a MASKED copy of THIS report (Mobile
             # Number + Email Address masked, same rules as the consolidated
@@ -4690,7 +4769,8 @@ def run():
                     send_email(subject,
                                build_lfa_email_body(label, rng, url, link_name, gen,
                                                     *_fu, *_gm, *_wk,
-                                                    greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                                                    greeting_name=EMAIL_NAMES.get(_rcpt.lower()),
+                                                    counsellor_goals=_perf_goals),
                                [_rcpt])
             # Restricted recipient(s): the MASKED report link (Viewer access
             # granted above) — NEVER the full report. Sent one email per recipient
@@ -4703,7 +4783,8 @@ def run():
                         send_email(subject,
                                    build_lfa_email_body(label, rng, url_masked, link_name,
                                                         gen, *_fu, *_gm, *_wk,
-                                                        greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                                                        greeting_name=EMAIL_NAMES.get(_rcpt.lower()),
+                                                        counsellor_goals=_perf_goals),
                                    [_rcpt])
                 else:
                     print("  [email] masked copy unavailable — NOT emailing masked "
