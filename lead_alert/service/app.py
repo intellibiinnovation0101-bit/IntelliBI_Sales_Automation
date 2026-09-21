@@ -55,6 +55,8 @@ async def health():
         "online_counsellors": sorted(HUB.online_emails()),
         "active_window": ops.within_active_window(),
         "alert_sections": SETTINGS.alert_sections,
+        "seeded": bool(store.meta_get("seed_v2_done")),
+        "last_poll": store.meta_get("last_poll_ts"),
     }
 
 
