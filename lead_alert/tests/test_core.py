@@ -90,7 +90,9 @@ row = {"_row": 42, "name": "Asha K", "mobile": "9876543210", "email": "a@x.com",
        "course": "Data Science", "form_type": "Alumni 1:1", "current_role": "QA",
        "message": "call me", "enquiry_date": "01-Jul-2026"}
 L = ops.build_lead_from_row(row)
-check("lead_id from row", L["lead_id"].endswith("row42"))
+check("lead_id is content-based", L["lead_id"].startswith("web:"))
+check("lead_id ignores row number",
+      L["lead_id"] == ops.build_lead_from_row({**row, "_row": 999})["lead_id"])
 check("subject synthesized", L["subject"] == "New Alumni 1:1 Enquiry Received")
 pub = ops.lead_public({**L, "status": "RECEIVED"})
 check("public has open_email_url", pub["open_email_url"].startswith("http"))

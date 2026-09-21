@@ -9,6 +9,7 @@ the event loop that serves WebSockets is never stalled.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import urllib.parse
 from datetime import datetime
 
@@ -44,6 +45,21 @@ def _subject_for(form_type: str) -> str:
     return f"New {ft} Enquiry Received" if ft else "New Program Enquiry Received"
 
 
+def _lead_fingerprint(row: dict) -> str:
+    """Stable identity from the lead's CONTENT (not its sheet row number), so
+    deleting or reordering rows never causes a missed or duplicate alert."""
+    mobile = "".join(ch for ch in str(row.get("mobile", "")) if ch.isdigit())[-10:]
+    parts = [
+        str(row.get("enquiry_date", "")).strip(),
+        str(row.get("name", "")).strip().lower(),
+        mobile,
+        str(row.get("email", "")).strip().lower(),
+        str(row.get("course", "")).strip().lower(),
+        str(row.get("form_type", "")).strip().lower(),
+    ]
+    return "web:" + hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
 def build_lead_from_row(row: dict) -> dict:
     """Turn a source-sheet row (google_io.SOURCE_COLS + _row) into a lead dict."""
     form_type = row.get("form_type", "")
@@ -51,7 +67,7 @@ def build_lead_from_row(row: dict) -> dict:
         row.get("course", ""), row.get("current_role", ""),
         row.get("message", "")) if b]
     return {
-        "lead_id": f"sheet:{SETTINGS.source_tab}:row{row['_row']}",
+        "lead_id": _lead_fingerprint(row),
         "source_row": row["_row"],
         "received_at": now_str(),
         "enquiry_date": row.get("enquiry_date", ""),

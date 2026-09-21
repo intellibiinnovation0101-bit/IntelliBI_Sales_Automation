@@ -129,6 +129,25 @@ def insert_lead(lead: dict) -> bool:
         return True
 
 
+def mark_seen(lead: dict) -> None:
+    """Record a lead id as already-known WITHOUT dispatching it — used to seed
+    the baseline of pre-existing sheet rows on first run. Stored with status
+    'SEEN' so it never appears in open_leads()/escalation."""
+    with _LOCK:
+        c = _connect()
+        c.execute(
+            """INSERT OR IGNORE INTO leads(lead_id, source_row, received_at,
+                   enquiry_date, name, mobile, email, course, form_type,
+                   preview, subject, sender, status, created_ts)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'SEEN', ?)""",
+            (lead["lead_id"], lead.get("source_row"), lead.get("received_at"),
+             lead.get("enquiry_date"), lead.get("name"), lead.get("mobile"),
+             lead.get("email"), lead.get("course"), lead.get("form_type"),
+             lead.get("preview"), lead.get("subject"), lead.get("sender"),
+             time.time()))
+        c.commit()
+
+
 def get_lead(lead_id: str) -> Optional[dict]:
     row = _connect().execute(
         "SELECT * FROM leads WHERE lead_id=?", (lead_id,)).fetchone()
