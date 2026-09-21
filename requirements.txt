@@ -23,3 +23,11 @@ playwright>=1.40
 
 # Centralized YAML configuration (config/config.yaml)
 PyYAML>=6.0
+
+# Enhanced (self-learning) Conversion Chance % model — OPTIONAL.
+# The Follow-Up report runs fine without these (it falls back to the built-in
+# weight-of-evidence model); install them to enable the calibrated ML model and
+# out-of-sample validation (LFA_ML_MODE=shadow|on). numpy ships with pandas.
+scikit-learn>=1.3
+numpy>=1.24
+

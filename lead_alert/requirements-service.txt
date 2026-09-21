@@ -1,0 +1,8 @@
+# IntelliBI Website Lead Alert — CENTRAL SERVICE dependencies (office PC).
+# Google auth + Sheets client are already used by the report pipeline; listed
+# here so the service can run in its own venv if you prefer to isolate it.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+google-api-python-client>=2.100
+google-auth>=2.30
+PyYAML>=6.0

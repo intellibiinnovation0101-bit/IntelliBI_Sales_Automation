@@ -214,6 +214,17 @@ def _active_emails(cfg, section):
     return out
 
 
+def _load_section_active_emails(section):
+    """Active emailids of a single counsellors.json section (live read); [] on any
+    read/parse failure. Used to grant Viewer (read-only) report access."""
+    try:
+        with open(_COUNSELLORS_JSON, encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception:
+        return []
+    return _active_emails(cfg, section)
+
+
 def load_recipient_names():
     """{emailid.lower(): display_name} for every Active record across all sections,
     each name read from that section's own name field. Used only to personalize the
@@ -267,6 +278,11 @@ def load_email_recipients():
 EMAIL_RECIPIENTS, MASK_RECIPIENTS = load_email_recipients()
 # email(lower) -> display name, for the personalized "Hello <name>," greeting.
 EMAIL_NAMES = load_recipient_names()
+# Active counsellors granted Viewer (read-only) access to the FULL report file, so
+# their link works regardless of the folder's sharing. (digitalmarketingspecialist
+# recipients are granted Viewer on the MASKED file — they are the masked_recips —
+# and intellibiadmin is intentionally not granted explicit per-file access here.)
+COUNSELLOR_VIEWER_RECIPS = _load_section_active_emails("counsellors")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVICE_ACCOUNT_FILE = os.environ.get(
@@ -889,6 +905,170 @@ def response_speed_bucket(history):
     return "delayed"
 
 
+# ── extra journey-timing buckets (train/score-consistent, no time leakage) ────
+def tenure_bucket(history):
+    """Overall engagement SPAN: days from first to last interaction. Intrinsic to
+    the journey (same meaning at training and scoring), so it transfers cleanly."""
+    if len(history) < 2:
+        return "single_touch"
+    span = (history[-1][1] - history[0][1]).total_seconds() / 86400.0
+    if span < 1:
+        return "same_day"
+    if span <= 7:
+        return "within_week"
+    if span <= 30:
+        return "within_month"
+    if span <= 90:
+        return "1-3_months"
+    return "over_3_months"
+
+
+def recency_bucket(history, as_of=None):
+    """'How recently active' — length of the most recent silence.
+      * scoring (as_of = today)  -> days since the LAST interaction: real staleness
+        of an active lead (a lead gone quiet is less likely to convert).
+      * training (as_of = None)  -> the TRAILING gap (last minus second-last
+        interaction): the analogous 'most-recent-silence' the journey ended on.
+    Both measure the same thing (recent quiet-period length) and neither uses the
+    calendar distance to 'now' for historical rows, so there is NO temporal
+    leakage between old and new leads."""
+    if not history:
+        return "Unknown"
+    last = history[-1][1]
+    if as_of is not None:
+        # accept a date or a datetime for as_of; history carries datetimes
+        if not isinstance(as_of, datetime) and isinstance(as_of, date):
+            as_of = datetime.combine(as_of, time.min)
+        try:
+            days = (as_of - last).total_seconds() / 86400.0
+        except Exception:
+            return "Unknown"
+    elif len(history) >= 2:
+        days = (last - history[-2][1]).total_seconds() / 86400.0
+    else:
+        return "Unknown"                      # single-touch, no trailing gap
+    if days < 0:
+        days = 0.0
+    if days <= 3:
+        return "fresh_3d"
+    if days <= 7:
+        return "week"
+    if days <= 30:
+        return "month"
+    if days <= 90:
+        return "cooling"
+    return "cold"
+
+
+def norm_course(*vals):
+    """Bucket the course/technology of interest into a small set of families, so
+    the model can learn course-level conversion differences without one-hot
+    exploding on free-text course names."""
+    t = " ".join(s(v).lower() for v in vals)
+    if not t.strip():
+        return "Unknown"
+    ai = any(k in t for k in ("artificial intelligence", "gen ai", "genai",
+                              "generative", "machine learning", "(ml)", " ml", "agentic"))
+    de = any(k in t for k in ("data engineer", "azure data", "etl", "databrick", "spark"))
+    da = any(k in t for k in ("data analy", "analytics", "power bi", "powerbi", "tableau"))
+    fs = any(k in t for k in ("full stack", "fullstack", ".net", "dotnet", "java",
+                              "python dev", "frontend", "front end", "backend", "web dev"))
+    test = any(k in t for k in ("testing", "qa ", "automation test", "selenium"))
+    # most specific first
+    if de and ai:
+        return "DataEngineering_AI"
+    if de:
+        return "DataEngineering"
+    if da and ai:
+        return "DataAnalytics_AI"
+    if da:
+        return "DataAnalytics"
+    if ai:
+        return "AI_ML"
+    if fs:
+        return "FullStack"
+    if test:
+        return "Testing"
+    return "OtherCourse"
+
+
+# Lead Status values that ARE (or imply) the final OUTCOME. These are used as
+# training LABELS elsewhere and must never become a prediction-time feature, so
+# lead_grade_bucket() maps them to the neutral "Unknown" (which contributes 0 to
+# the score). Everything else is a legitimate pre-outcome intent grade.
+_LEAD_STATUS_OUTCOME_TOKENS = (
+    "admission confirmed", "confirmed", "enrolled", "enroll", "joined", "paid",
+    "converted", "not interested", "irrelevant", "lost", "dropped", "backed",
+    "backout", "back out", "closed", "rejected", "declin")
+
+
+def lead_grade_bucket(lead_status):
+    """Map Lead Status to a pre-outcome INTENT grade (Hot/Warm/Cold/…). Terminal
+    outcome values are neutralised to 'Unknown' so the finalized outcome can never
+    leak into the features of an active lead (requirement: outcomes are labels,
+    not inputs)."""
+    a = s(lead_status).lower().strip()
+    if not a:
+        return "Unknown"
+    if any(k in a for k in _LEAD_STATUS_OUTCOME_TOKENS):
+        return "Unknown"                       # outcome -> neutral (no leakage)
+    if "hot" in a:
+        return "Hot"
+    if "warm" in a:
+        return "Warm"
+    if "cold" in a:
+        return "Cold"
+    if "casual" in a or "explor" in a:
+        return "Casual"
+    if "follow" in a:
+        return "FollowUp"
+    if "unable" in a or "not reach" in a or "unreach" in a or "no response" in a:
+        return "Unreachable"
+    if "interest" in a:                        # "interested" (not the negated form)
+        return "Interested"
+    return "Other"
+
+
+# Pre-outcome intent / objection cues read from Remarks / Counsellor Notes. This
+# is a lightweight, deterministic sentiment-and-intent reader (no model, no deps):
+# it captures the MEANING of the note as buying intent vs hesitation, NOT the raw
+# text. Terminal outcome statements are deliberately NOT encoded here (that would
+# just re-learn the label), so notes act as a pre-decision signal only.
+_NOTE_POS = ("interested", "ready", "will join", "wants to join", "keen", "excited",
+             "book", "booking", "seat", "confirm slot", "demo", "syllabus",
+             "curriculum", "fee", "fees", "emi", "installment", "instalment",
+             "discount", "scholarship", "scheduled", "positive", "follow up",
+             "call back", "callback", "visit", "coming", "start", "batch")
+_NOTE_STRONG = ("emi", "installment", "instalment", "fee", "fees", "discount",
+                "scholarship", "book", "seat", "ready", "will join", "wants to join",
+                "advance", "token", "registration")
+_NOTE_OBJECTION = ("expensive", "costly", "high fee", "budget", "afford", "think",
+                   "thinking", "later", "next month", "postpone", "hold", "busy",
+                   "no time", "compare", "comparing", "competitor", "confused",
+                   "decide", "family", "discuss", "revert", "get back")
+
+
+def notes_signal(remarks):
+    """Classify Remarks into a pre-outcome intent bucket:
+       strong_positive | positive | objection | neutral.
+    Deterministic keyword/intent reading — captures meaning, not raw text."""
+    a = s(remarks).lower()
+    if not a.strip():
+        return "none"
+    strong = any(k in a for k in _NOTE_STRONG)
+    pos = any(k in a for k in _NOTE_POS)
+    obj = any(k in a for k in _NOTE_OBJECTION)
+    if strong and not obj:
+        return "strong_positive"
+    if pos and not obj:
+        return "positive"
+    if obj and not pos:
+        return "objection"
+    if obj and pos:
+        return "mixed"
+    return "neutral"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  NORMALISERS (feature bucketing — shared by model & report)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1021,7 +1201,9 @@ def is_followup_excluded_status(*statuses):
 #  FEATURE EXTRACTION  (one canonical feature dict per lead)
 # ═══════════════════════════════════════════════════════════════════════════
 FEATURE_ORDER = ["platform_primary", "reach", "interactions", "referral",
-                 "work", "timeline", "city", "meet", "walkin", "speed"]
+                 "work", "timeline", "city", "meet", "walkin", "speed",
+                 # richer journey + intent features (all pre-outcome, leakage-safe)
+                 "tenure", "recency", "course", "lead_grade", "notes"]
 
 FEATURE_LABEL = {
     "platform_primary": "Primary platform",
@@ -1033,12 +1215,23 @@ FEATURE_LABEL = {
     "city": "Location",
     "meet": "Google-Meet engagement",
     "walkin": "Walk-In engagement",
-    "speed": "Response speed",
+    "speed": "Interaction cadence (gap between touches)",
+    "tenure": "Engagement span (first→last touch)",
+    "recency": "Recency of latest interaction",
+    "course": "Course / technology of interest",
+    "lead_grade": "Lead Status intent grade",
+    "notes": "Remarks intent / sentiment",
 }
 
 
 def build_features(*, history, platforms, num_interactions, referral,
-                   work, timeline, city, meet_state, walkin_state):
+                   work, timeline, city, meet_state, walkin_state,
+                   course="", lead_status="", notes="", as_of=None):
+    """Canonical per-lead feature dict. New parameters (course/lead_status/notes/
+    as_of) are optional so every existing call site keeps working; when supplied
+    they add the richer journey + intent signals. `as_of` (today) is used ONLY to
+    measure recency of the latest interaction for an active lead — see
+    recency_bucket() for why this does not leak time into training."""
     prim = norm_platform(platforms[0]) if platforms else "Unknown"
     return {
         "platform_primary": prim if not referral else "Referral",
@@ -1050,7 +1243,12 @@ def build_features(*, history, platforms, num_interactions, referral,
         "city": city,
         "meet": meet_state,     # attended / noshow / scheduled / none
         "walkin": walkin_state,  # attended / scheduled / none
-        "speed": response_speed_bucket(history),
+        "speed": response_speed_bucket(history),   # cadence (median gap)
+        "tenure": tenure_bucket(history),          # engagement span
+        "recency": recency_bucket(history, as_of), # latest-interaction recency
+        "course": norm_course(course),             # course/technology family
+        "lead_grade": lead_grade_bucket(lead_status),  # intent grade (outcome-safe)
+        "notes": notes_signal(notes),              # remarks intent / sentiment
     }
 
 
@@ -1157,6 +1355,11 @@ def index_master(master):
     c_lead = master.col("Lead Status")
     c_back = master.col("Backout Reason", "BackOutReason")
     c_rem = master.col("Remarks", "Counsellor Notes")
+    c_course = master.col("Course Advised",
+                          "Which technology are you interested in learning?",
+                          "Course Interested In")
+    c_course2 = master.col("Which technology are you interested in learning?",
+                           "Course Advised", "Course Interested In")
     c_couns = master.col("Counselling By", "Counsellor")
     c_name = master.col("Full Name", "Name")
     c_email = master.col("Email Address", "Email")
@@ -1192,6 +1395,8 @@ def index_master(master):
             "lead_status": s(r.get(c_lead)) if c_lead else "",
             "backout": s(r.get(c_back)) if c_back else "",
             "remarks": s(r.get(c_rem)) if c_rem else "",
+            "course": (s(r.get(c_course)) if c_course else "") or
+                      (s(r.get(c_course2)) if c_course2 else ""),
             "counsellor": s(r.get(c_couns)) if c_couns else "",
             "next_followup_raw": s(r.get(c_nextfu)) if c_nextfu else "",
             "gmeet_sched_raw": s(r.get(c_gmsch)) if c_gmsch else "",
@@ -1361,7 +1566,10 @@ def build_meet_walk_records(master_idx, lead_by_mob, meet_attended, walk_ts,
                                    work=norm_work(m.get("work", "")),
                                    timeline=norm_timeline(m.get("timeline_raw", "")),
                                    city=norm_city(m.get("city", "")),
-                                   meet_state="none", walkin_state="none")
+                                   meet_state="none", walkin_state="none",
+                                   course=m.get("course", ""),
+                                   lead_status=m.get("lead_status", ""),
+                                   notes=m.get("remarks", ""), as_of=today)
             p = model.score(feats)
             rec = {"mobile": mob, "name": m.get("name", ""),
                    "counsellor": m.get("counsellor", "") or "(Unassigned)",
@@ -1532,6 +1740,30 @@ def follow_up_metrics(next_raw, versions, converted, lost, today, cutoff,
 # ═══════════════════════════════════════════════════════════════════════════
 #  LEAD ASSEMBLY  (join every source into one enriched active-lead record)
 # ═══════════════════════════════════════════════════════════════════════════
+def _platforms_from_active(r, A, referral):
+    """Reconstruct a lead-source list from the ACTIVE intake sheet, used only when
+    the Consolidated-master journey is missing for a lead. Order matters:
+    platforms[0] becomes the primary platform (a referral lead is forced to the
+    'Referral' bucket by build_features regardless). Returns [] when nothing is
+    known, which is exactly the previous behaviour — so this only ever ADDS signal,
+    never removes it, and never raises (absent columns resolve to None)."""
+    plats = []
+    if referral:
+        plats.append("Referral")
+    # explicit intake channel booleans, in a stable priority order
+    for key, label in (("iswalk", "Walk-In"), ("isweb", "Website"),
+                       ("iswa", "WhatsApp"), ("iscall", "Call")):
+        col = A.get(key)
+        if col and yes(r.get(col)) and label not in plats:
+            plats.append(label)
+    # free-text "How did you hear about us?" as a last resort
+    if A.get("howheard"):
+        hh = norm_platform(s(r.get(A["howheard"])))
+        if hh and hh not in NEUTRAL_VALUES and hh not in plats:
+            plats.append(hh)
+    return plats
+
+
 def assemble_leads(active, inactive, master_idx, meet_map, walkin_set, today):
     """Return list of enriched active-lead dicts (one per active record)."""
     if not active or not len(active):
@@ -1565,6 +1797,17 @@ def assemble_leads(active, inactive, master_idx, meet_map, walkin_set, today):
         "goal":  active.col("Career Goal", "What is your primary goal?"),
         "company": active.col("Current Company Name"),
         "futype": active.col("Follow-Up Type", "Follow Up Type", "FollowUp Type"),
+        # Fallback intake signals — used ONLY when the master journey is missing
+        # for this mobile, so a real lead never collapses to all-Unknown features
+        # (which pinned genuinely-hot leads at the base rate). .col() -> None if
+        # the column is absent, so every use below is safe.
+        "howheard": active.col("How did you hear about IntelliBI?",
+                               "How did you hear about us?", "Lead Source", "Source"),
+        "nint":  active.col("Number of Interactions", "No of Interactions"),
+        "iswalk": active.col("IsWalk-In", "Is Walk-In", "IsWalkIn"),
+        "isweb": active.col("IsWebsite", "Is Website"),
+        "iswa":  active.col("IsWhatsapp", "IsWhatsApp", "Is Whatsapp"),
+        "iscall": active.col("IsCall", "Is Call"),
     }
     versions_idx = index_inactive_versions(inactive)
     leads = []
@@ -1579,6 +1822,12 @@ def assemble_leads(active, inactive, master_idx, meet_map, walkin_set, today):
         referral = (yes(r.get(A["ref"])) if A["ref"] else False) or \
                    (bool(s(r.get(A["refn"]))) if A["refn"] else False) or \
                    bool(m.get("referral"))
+        # Journey fallback: when this active lead has no Consolidated-master match
+        # (or the master carries no journey yet), reconstruct the lead-source list
+        # from the active intake sheet so its Conversion Chance % is not pinned to
+        # the base rate purely for lack of a join. Only fills in when empty.
+        if not platforms:
+            platforms = _platforms_from_active(r, A, referral)
         # attendance
         gmeet_sched = yes(r.get(A["gmeet"])) if A["gmeet"] else False
         walk_sched = yes(r.get(A["walk"])) if A["walk"] else False
@@ -1601,12 +1850,18 @@ def assemble_leads(active, inactive, master_idx, meet_map, walkin_set, today):
                          r.get(A["exp"]) if A["exp"] else m.get("experience", ""))
         timeline = norm_timeline(s(r.get(A["tl"])) if A["tl"] else m.get("timeline_raw", ""))
         city = norm_city(s(r.get(A["city"])) if A["city"] else m.get("city", ""))
-        num_int = m.get("num_interactions") or str(max(len(history), 1))
+        num_int = (m.get("num_interactions")
+                   or (s(r.get(A["nint"])) if A.get("nint") else "")
+                   or str(max(len(history), 1)))
 
+        course_val = (s(r.get(A["course"])) if A.get("course") else "") or m.get("course", "")
+        notes_val = m.get("remarks", "") or (s(r.get(A["notes"])) if A.get("notes") else "")
         feats = build_features(history=history, platforms=platforms,
                                num_interactions=num_int, referral=referral,
                                work=work, timeline=timeline, city=city,
-                               meet_state=mstate, walkin_state=wstate)
+                               meet_state=mstate, walkin_state=wstate,
+                               course=course_val, lead_status=lead_status,
+                               notes=notes_val, as_of=today)   # scoring: real recency
         # activity date for period filtering
         act_dt = (parse_dt(s(r.get(A["ts"])) if A["ts"] else "") or
                   (history[-1][1] if history else None) or
@@ -1707,7 +1962,10 @@ def build_master_pending_leads(master_idx, exclude_mobiles, meet_map, walkin_set
         feats = build_features(history=history, platforms=platforms,
                                num_interactions=num_int, referral=referral,
                                work=work, timeline=timeline, city=city,
-                               meet_state="none", walkin_state="none")
+                               meet_state="none", walkin_state="none",
+                               course=m.get("course", ""),
+                               lead_status=m.get("lead_status", ""),
+                               notes=m.get("remarks", ""), as_of=today)
         first_dt = (parse_dt(m.get("first_enquiry", "")) or
                     (history[0][1] if history else None))
         lead = {
@@ -1811,13 +2069,184 @@ def build_training_samples(master_idx, meet_map, walkin_set):
             work=norm_work(m.get("work", "")),      # already normalised
             timeline=norm_timeline(m.get("timeline_raw", "")),
             city=norm_city(m.get("city", "")),
-            meet_state=mstate, walkin_state=wstate)
+            meet_state=mstate, walkin_state=wstate,
+            course=m.get("course", ""), lead_status=m.get("lead_status", ""),
+            notes=m.get("remarks", ""), as_of=None)   # training: trailing-gap recency
         # work/city/timeline may be double-normalised; re-normalise safely
         feats["work"] = m.get("work", "Unknown") if m.get("work") else "Unknown"
         feats["city"] = norm_city(m.get("city", ""))
         feats["timeline"] = norm_timeline(m.get("timeline_raw", ""))
         samples.append((feats, is_converted_status(m.get("admission_status", ""))))
     return samples
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ENHANCED (SELF-LEARNING) TRAINING DATASET  — used by conversion_ml.py
+#  Duplicate-safe, leakage-safe, enriched with the enrolled-admission outcomes.
+# ═══════════════════════════════════════════════════════════════════════════
+def _ml_features_for_master(m, meet_map, walkin_set, as_of=None):
+    """Feature dict for one master/history lead — identical construction to
+    build_training_samples so the enhanced model sees the same journey features
+    the WoE model does.
+
+    `as_of` controls only the recency bucket: None (default) = the trailing-gap
+    definition used for TRAINING; a date = 'days since last interaction' used when
+    SCORING a live/open lead. Everything else is identical, so a lead's features
+    (and therefore its Conversion Chance %) are computed one single way — this is
+    what lets pyConsolidatedLeadPerformanceReport reuse the exact same model."""
+    mob = m.get("mobile", "")
+    mstate = meet_state(False, meet_map.get(mob, ""))
+    wstate = walkin_state(False, mob in walkin_set)
+    feats = build_features(
+        history=m.get("history", []), platforms=m.get("platforms") or [],
+        num_interactions=m.get("num_interactions") or len(m.get("history", [])),
+        referral=bool(m.get("referral")),
+        work=norm_work(m.get("work", "")),
+        timeline=norm_timeline(m.get("timeline_raw", "")),
+        city=norm_city(m.get("city", "")),
+        meet_state=mstate, walkin_state=wstate,
+        course=m.get("course", ""), lead_status=m.get("lead_status", ""),
+        notes=m.get("remarks", ""), as_of=as_of)
+    feats["work"] = m.get("work", "Unknown") if m.get("work") else "Unknown"
+    feats["city"] = norm_city(m.get("city", ""))
+    feats["timeline"] = norm_timeline(m.get("timeline_raw", ""))
+    return feats
+
+
+def _ml_minimal_features():
+    """Neutral feature dict for an OLDER enrolled lead with no Consolidated match,
+    so missing history never fabricates signal (neutral values score to nothing)."""
+    return {
+        "platform_primary": "Unknown", "reach": "single",
+        "interactions": interactions_bucket(0), "referral": "no",
+        "work": "Unknown", "timeline": "Unknown", "city": "Unknown",
+        "meet": "none", "walkin": "none", "speed": response_speed_bucket([]),
+    }
+
+
+def build_ml_dataset(master_like, enrolled_mobiles, meet_map, walkin_set):
+    """Duplicate-safe, leakage-safe labelled records for the enhanced pipeline.
+
+      * master_like      : mobile10 -> merged master/history row (train_idx)
+      * enrolled_mobiles : set of mobile10 that ACTUALLY enrolled (positive truth
+                           from the Student Admission Responses / New Enroll sheet)
+
+      - One record per mobile (duplicates never become multiple rows).
+      - CONVERTED  = Admission Status "Admission Confirmed" OR phone in the enrolled
+        sheet (real admission outcome).
+      - LOST       = not-interested / backed-out / dropped.
+      - resolved   = converted OR lost; still-open (unknown) leads are excluded from
+        training (resolved=False) — never train on an outcome that hasn't happened.
+      - `label`      carries the enrolled/admission-sheet correction (WITH it);
+        `label_base` is the master-status-only label (WITHOUT it). conversion_ml
+        cross-validates both labellings and keeps the enrolled labels only if they
+        do NOT hurt out-of-sample accuracy ("use the Admission sheet only if it
+        genuinely improves prediction" — decided from data, not hard-coded).
+      - The enrolled sheet corrects the label ONLY for a lead that HAS a real
+        journey (a Consolidated match). Enrolled phones with NO journey are NOT
+        injected as neutral-feature positives: they carry nothing to learn from
+        and only distort the base rate (empirically ~89% of enrolled phones have
+        no journey match), which was making the model score sparse / Not-Interested
+        leads far too high. Those unmatched phones are still used elsewhere by
+        load_enrolled_phones() for the Follow-Up Pending exclusion.
+      - `when` = first-enquiry datetime, used ONLY for time-ordered validation,
+        never as a feature.
+    """
+    enrolled = {m for m in (enrolled_mobiles or set()) if m}
+    recs = {}
+    for mob, m in (master_like or {}).items():
+        conv_master = is_converted_status(m.get("admission_status", ""))
+        converted = conv_master or (mob in enrolled)
+        lost = is_lost_status(m.get("admission_status", ""),
+                              m.get("lead_status", ""), m.get("backout", ""))
+        recs[mob] = {
+            "mobile": mob,
+            "feats": _ml_features_for_master(m, meet_map, walkin_set),
+            "label": bool(converted),          # WITH the enrolled-sheet correction
+            "label_base": bool(conv_master),   # WITHOUT it (master status only)
+            "resolved": bool(converted or lost),
+            "when": parse_dt(m.get("first_enquiry", "")),
+        }
+    # Enrolled phones that MATCH a real journey correct THAT lead's label (and
+    # make it resolved). Unmatched enrolled phones are intentionally skipped —
+    # no neutral phantom positives (see docstring).
+    for mob in enrolled:
+        if mob in recs:
+            recs[mob]["label"] = True          # actual admission outcome
+            recs[mob]["resolved"] = True
+    return list(recs.values())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  SHARED CONVERSION SCORER  — single source of truth for BOTH reports
+#  (pyLeadFollowUpAnalysisReport + pyConsolidatedLeadPerformanceReport). Any
+#  other report that needs the Conversion Chance % must call these, never
+#  re-implement the model, so the two can never diverge.
+# ═══════════════════════════════════════════════════════════════════════════
+def build_conversion_scorer(train_idx, meet_map, walkin_set, sheets, out_dir=None):
+    """Train the conversion model EXACTLY as the Follow-Up report does and return
+    (scorer, bands, model).
+
+    This is the one place the model is built. run() calls it, and so does
+    conversion_scores_for_master() (used by the Consolidated report) — so both
+    reports share the identical trained scorer, bands and selection gate.
+
+    Gated by LFA_ML_MODE (off | shadow | on); default 'on'. Degrades gracefully:
+    on any failure it keeps the plain weight-of-evidence model."""
+    model = ConversionModel().train(build_training_samples(train_idx, meet_map, walkin_set))
+    bands = priority_bands(model.base_rate)
+    scorer = model
+    _ml_mode = os.environ.get("LFA_ML_MODE", "on").strip().lower()
+    if _ml_mode in ("shadow", "on"):
+        try:
+            import conversion_ml
+            _ml_enrolled = load_enrolled_phones(sheets)
+            _ml_records = build_ml_dataset(train_idx, _ml_enrolled, meet_map, walkin_set)
+            _ml = conversion_ml.build_and_select(
+                _ml_records,
+                baseline_factory=lambda samp: ConversionModel().train(samp),
+                feature_order=FEATURE_ORDER, out_dir=out_dir or OUTPUT_DIR,
+                mode=_ml_mode, neutral_values=NEUTRAL_VALUES)
+            if _ml_mode == "on":
+                if _ml.get("baseline_full") is not None:
+                    model = _ml["baseline_full"]          # WoE on the enriched data
+                    bands = priority_bands(model.base_rate)
+                scorer = _ml.get("scorer") or model
+        except Exception as e:
+            print("  [ml] enhancement skipped (keeping current model):", e)
+            scorer = model
+    return scorer, bands, model
+
+
+def conversion_scores_for_master(sheets, out_dir=None):
+    """Return ({mobile10: {'conversion_chance': float%, 'priority': band}}, bands,
+    base_rate) for every lead in the Consolidate master, using the IDENTICAL
+    trained model, bands and feature construction as the Follow-Up report.
+
+    Exposed so pyConsolidatedLeadPerformanceReport can show the same Conversion
+    Chance % / Priority for a lead without duplicating any ML logic. It reads the
+    same master / meet / walk-in / enrolled sources this report trains on, so the
+    numbers match. Scoring uses as_of=today (recency = days since the last
+    interaction) — the live/open-lead convention."""
+    master = read_source(sheets, MASTER_SHEET_ID, MASTER_TABS, "master")
+    meet = read_source(sheets, MEET_SHEET_ID, MEET_TABS, "meet", optional=True)
+    walkin = read_source(sheets, WALKIN_SHEET_ID, WALKIN_TABS, "walkin", optional=True)
+    master_idx = index_master(master)
+    meet_map = load_meet_attendance(meet)
+    walkin_set = load_walkin_attended(walkin)
+    train_idx = dict(master_idx)
+    for mob, row in load_history_master_index().items():
+        train_idx.setdefault(mob, row)
+    scorer, bands, model = build_conversion_scorer(
+        train_idx, meet_map, walkin_set, sheets, out_dir)
+    today = now_ist().date()
+    scores = {}
+    for mob, m in master_idx.items():
+        feats = _ml_features_for_master(m, meet_map, walkin_set, as_of=today)
+        p = scorer.score(feats)
+        scores[mob] = {"conversion_chance": round(p * 100, 1),
+                       "priority": band_for(p, bands)}
+    return scores, bands, model.base_rate
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3921,14 +4350,24 @@ def run():
             added += 1
     if added:
         print(f"Training augmented with {added} historical leads from {HISTORY_DIR}")
-    model = ConversionModel().train(build_training_samples(train_idx, meet_map, walkin_set))
-    bands = priority_bands(model.base_rate)
+
+    # ── self-learning conversion model (gated by LFA_ML_MODE: off | shadow | on) ─
+    # Built via the SINGLE shared entry point build_conversion_scorer(), so this
+    # report and pyConsolidatedLeadPerformanceReport use the identical trained
+    # model, bands and selection gate — the Conversion Chance % can never diverge.
+    #   off    : legacy WoE over ALL master leads (rollback escape hatch).
+    #   shadow : build the clean pipeline + LOG metrics, do NOT change the score.
+    #   on     : DEFAULT — resolved-only, duplicate-safe, admission-sheet A/B-tested,
+    #            calibrated model adopted only if it beats the WoE model under
+    #            cross-validation; a strict gate means the score can never regress.
+    scorer, bands, model = build_conversion_scorer(
+        train_idx, meet_map, walkin_set, sheets, OUTPUT_DIR)
     print(f"Model: base rate {model.base_rate*100:.2f}%  "
           f"({model.n_pos}/{model.n_train} converted)")
 
     # ── assemble & score active leads ────────────────────────────────────────
     leads = assemble_leads(active, inactive, master_idx, meet_map, walkin_set, today)
-    score_and_classify(leads, model, bands)
+    score_and_classify(leads, scorer, bands)
     print(f"Active leads scored: {len(leads)}")
 
     # ── canonicalise counsellor names (merge case/spacing variants → one) ─────
@@ -4206,6 +4645,12 @@ def run():
         url, created, _fid = upload_report_to_drive(drive, target_folder, fname_ts, xlsx_path)
         print(f"  -> {sub_name}/{period_name}  {'created' if created else 'replaced'}: {url}")
 
+        # Active counsellors get Viewer (read-only) access to the FULL report file
+        # directly, so the link works for them regardless of the folder's sharing
+        # (same report-access logic as the consolidated report).
+        if COUNSELLOR_VIEWER_RECIPS:
+            share_file_with(drive, _fid, COUNSELLOR_VIEWER_RECIPS, role="reader")
+
         # ── Email the summary (same config/format as the consolidated report) ──
         # Values below are the EXACT figures shown on this report's Summary tab.
         if SEND_EMAIL:
@@ -4220,8 +4665,10 @@ def run():
 
             # Restricted recipient(s): build a MASKED copy of THIS report (Mobile
             # Number + Email Address masked, same rules as the consolidated
-            # report), upload it as a SEPARATE Drive file, and share it with them
-            # as Editor. The original full report is never modified.
+            # report), upload it as a SEPARATE Drive file, and share THAT file with
+            # them directly as Viewer (read-only) so the link works for them
+            # regardless of the folder's sharing. The original full report is never
+            # modified.
             url_masked = None
             if masked_recips:
                 masked_xlsx_path = os.path.join(OUTPUT_DIR, fname_ts + " (Masked).xlsx")
@@ -4231,7 +4678,7 @@ def run():
                         url_masked, _mc, masked_fid = upload_report_to_drive(
                             drive, target_folder, fname_ts + " (Masked)", masked_xlsx_path)
                         print(f"  masked copy: {url_masked}")
-                        share_file_with(drive, masked_fid, masked_recips, role="writer")
+                        share_file_with(drive, masked_fid, masked_recips, role="reader")
                 except Exception as e:
                     print("  [drive] masked report build/upload/share FAILED:", e)
 
@@ -4245,17 +4692,23 @@ def run():
                                                     *_fu, *_gm, *_wk,
                                                     greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
                                [_rcpt])
-            # Restricted recipient(s): the MASKED report link (Editor access
-            # granted above) — NEVER the full report. If the masked copy could not
-            # be produced, fall back to the summary WITHOUT any link so no
-            # unmasked lead detail ever leaves the building. Also one per recipient.
+            # Restricted recipient(s): the MASKED report link (Viewer access
+            # granted above) — NEVER the full report. Sent one email per recipient
+            # so each greeting carries that person's name. If the masked copy could
+            # not be produced/uploaded, they are NOT emailed at all, so unmasked
+            # lead detail can never leak (same behavior as the consolidated report).
             if masked_recips:
-                for _rcpt in masked_recips:
-                    send_email(subject,
-                               build_lfa_email_body(label, rng, url_masked or "", link_name,
-                                                    gen, *_fu, *_gm, *_wk,
-                                                    greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
-                               [_rcpt])
+                if url_masked:
+                    for _rcpt in masked_recips:
+                        send_email(subject,
+                                   build_lfa_email_body(label, rng, url_masked, link_name,
+                                                        gen, *_fu, *_gm, *_wk,
+                                                        greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                                   [_rcpt])
+                else:
+                    print("  [email] masked copy unavailable — NOT emailing masked "
+                          "recipients (to avoid sending unmasked data):",
+                          ", ".join(masked_recips))
 
         # AUTO mode: the Weekly report generates once per day, on the first
         # SUCCESSFUL run. Reaching here means this job fully generated + uploaded

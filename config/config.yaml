@@ -55,6 +55,26 @@ pipeline:
   stop_on_failure: true              # abort downstream layers if a critical layer fails
   script_timeout_seconds: 5400       # per-script hard cap (90 min); "" = no cap
 
+lead_alert:                          # Website Lead popup / acknowledgement service
+  enabled: true
+  host: "0.0.0.0"                    # bind all interfaces so LAN clients can reach it
+  port: 8787
+  # Source = the Google Sheet the website Apps Script fills on every submission.
+  source_sheet_id: "1prW3GKMnGJZ2U5b0gKjLqTJfczfFTYxUwmWImneDtnE"
+  source_tab: "Contact Us Form"
+  poll_seconds: 20                   # how often to check the sheet for new leads
+  # Optional audit / metrics mirror. Create the sheet, share it with the service
+  # account as Editor, and put its id here. Blank = mirroring disabled.
+  log_sheet_id: ""
+  log_tab: "Website Lead Alert Log"
+  alert_sections: ["counsellors"]    # which counsellors.json sections get alerted (Active only)
+  realert_after_min: 3               # re-alert online counsellors if still unclaimed
+  escalate_after_min: 8              # e-mail the escalation section if still unclaimed
+  expire_after_min: 30               # mark UNACKNOWLEDGED and close popups
+  escalate_to_section: "intellibiadmin"
+  active_from: "09:30"               # operating window (local time); outside it the poller idles
+  active_to: "23:00"
+
 # -----------------------------------------------------------------------------
 #  Reference only — these values currently live inside the report scripts and
 #  are documented here so you know where to change them. They are NOT injected

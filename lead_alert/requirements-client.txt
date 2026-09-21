@@ -1,0 +1,8 @@
+# IntelliBI Website Lead Alert — COUNSELLOR CLIENT dependencies.
+# tkinter ships with the standard Python installer (no pip needed).
+websocket-client>=1.7
+pystray>=0.19
+Pillow>=10.0
+pywin32>=306
+# Build-only (needed on the machine that produces the .exe, not on counsellor PCs):
+pyinstaller>=6.0
