@@ -923,7 +923,3 @@ ${sheetUrl}
     Logger.log("Error sending admin email: " + error);
   }
 }
-
-
-
-
