@@ -910,15 +910,16 @@ def add_exec_summary(tab, active):
     tab.blank()
 
 
-def leadtype_share_rows(active, day=None):
+def leadtype_share_rows(active, day=None, include_repeat=False):
     """Lead Type Share Analysis — the SAME calculation and table content as the
     'Lead Type Share Analysis' block in the Hourly Lead Type Analysis tab, but
     returning ONLY the table parts (header, per-type rows, total) — no chart.
 
     Reuses the exact filtering/counting via _leadtype_hourly (Fresh-Relevant,
     Non-Referral) + _ordered_lead_types, and the identical count/share-% formula
-    and cell text. Scope it to any lead set (e.g. one counsellor's leads)."""
-    by, hours, present = _leadtype_hourly(active, day)
+    and cell text. Scope it to any lead set (e.g. one counsellor's leads).
+    include_repeat=True also counts that set's Repeat leads (else Fresh only)."""
+    by, hours, present = _leadtype_hourly(active, day, include_repeat=include_repeat)
     lead_types = _ordered_lead_types(present) or [LEAD_TYPE_UNIDENTIFIED]
     col_tot = {lt: 0 for lt in lead_types}
     grand = 0
@@ -1959,7 +1960,7 @@ def build_hourly_tab(period_label, period_range, active, day, gen_stamp):
     return t
 
 
-def _leadtype_hourly(active, day=None):
+def _leadtype_hourly(active, day=None, include_repeat=False):
     """Cross-tab of enquiry HOUR -> {Lead Type: count}, restricted to
     Fresh-Relevant (Non-Referral) leads only:
         * Fresh     — first enquiry falls in the period (_is_new)
@@ -1972,8 +1973,8 @@ def _leadtype_hourly(active, day=None):
     by = defaultdict(lambda: defaultdict(int))
     hours, present = set(), set()
     for a in active:
-        if not a.get("_is_new"):
-            continue                          # Fresh only (drop Repeat leads)
+        if not include_repeat and not a.get("_is_new"):
+            continue                          # Fresh only (drop Repeat) unless include_repeat
         if is_referral(a):
             continue                          # Non-Referral only
         if not yes(a.get(C_RELEV)):
@@ -2216,10 +2217,10 @@ def build_report(period_label, period_range, df, start, end):
         _exec_title_idx = len(tb.rows)                     # row where "Executive Summary" begins
         add_exec_summary(tb, leads)
         # Lead Type Share Analysis TABLE (no chart) to the RIGHT of the Executive
-        # Summary, scoped to THIS counsellor's own leads. Same calc/table/colours
+        # Summary, scoped to THIS counsellor's own leads (Fresh + Repeat). Same calc/table/colours
         # as the Hourly tab's share table; placed two columns right of the 3-column
         # Executive Summary (cols A–C), leaving a gap column (D), starting at col E.
-        _sh_header, _sh_data, _sh_total = leadtype_share_rows(leads, day=None)
+        _sh_header, _sh_data, _sh_total = leadtype_share_rows(leads, day=None, include_repeat=True)
         attach_side_table(tb, _exec_title_idx, 4, "Lead Type Share Analysis",
                           _sh_header, _sh_data, _sh_total)
         # Lead Source Performance for THIS counsellor's leads — same structure and
