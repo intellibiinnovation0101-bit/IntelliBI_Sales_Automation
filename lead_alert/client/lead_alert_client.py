@@ -91,7 +91,10 @@ def main():
         try:
             while True:
                 msg = q.get_nowait()
-                _handle(msg)
+                try:
+                    _handle(msg)
+                except Exception as e:
+                    print("  [client] handler error (continuing):", e)
         except queue.Empty:
             pass
         root.after(200, pump)

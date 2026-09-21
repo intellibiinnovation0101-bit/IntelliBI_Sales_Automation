@@ -38,6 +38,7 @@ class WSClient:
         self._app = None
         self._connected = False
         self._stop = False
+        self._backoff = 2
         self._lock = threading.Lock()
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ class WSClient:
             pass
 
     def _run(self):
-        backoff = 2
+        self._backoff = 2
         while not self._stop:
             try:
                 self._app = websocket.WebSocketApp(
@@ -69,12 +70,13 @@ class WSClient:
             self._connected = False
             if self._stop:
                 break
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 30)      # 2,4,8,16,30,30…
+            time.sleep(self._backoff)
+            self._backoff = min(self._backoff * 2, 30)   # 2,4,8,16,30,30…
 
     # ── callbacks ────────────────────────────────────────────────────────────
     def _on_open(self, _app):
         self._connected = True
+        self._backoff = 2          # healthy connection -> fast reconnect next time
         self.q.put({"type": CONNECTED})
 
     def _on_message(self, _app, message):
