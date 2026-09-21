@@ -910,28 +910,39 @@ def add_exec_summary(tab, active):
     tab.blank()
 
 
-def leadtype_share_rows(active, day=None, include_repeat=False):
-    """Lead Type Share Analysis — the SAME calculation and table content as the
-    'Lead Type Share Analysis' block in the Hourly Lead Type Analysis tab, but
-    returning ONLY the table parts (header, per-type rows, total) — no chart.
+def leadtype_share_rows(active, day=None):
+    """Lead Type Share Analysis — count of each Lead Type and its share %, over
+    the given lead set (header, per-type rows, total — no chart).
 
-    Reuses the exact filtering/counting via _leadtype_hourly (Fresh-Relevant,
-    Non-Referral) + _ordered_lead_types, and the identical count/share-% formula
-    and cell text. Scope it to any lead set (e.g. one counsellor's leads).
-    include_repeat=True also counts that set's Repeat leads (else Fresh only)."""
-    by, hours, present = _leadtype_hourly(active, day, include_repeat=include_repeat)
-    lead_types = _ordered_lead_types(present) or [LEAD_TYPE_UNIDENTIFIED]
-    col_tot = {lt: 0 for lt in lead_types}
+    Counts EVERY lead in the set so the total reconciles with that set's Lead
+    Details (a counsellor's Fresh + Repeat), rather than the Fresh-Relevant-Non-
+    Referral subset the Hourly tab uses. Keeps the report's existing Lead Type
+    mapping (master 'Lead Type', blank -> 'Unidentified'), the same display order
+    (_ordered_lead_types) and the identical count/share-% cell text. `day`, when
+    given, restricts to leads whose first enquiry falls on that date."""
+    col_tot = defaultdict(int)
+    present = set()
     grand = 0
-    for _h, counts in by.items():
-        for lt in lead_types:
-            c = int(counts.get(lt, 0))
-            col_tot[lt] += c
-            grand += c
+    for a in active:
+        if day is not None:
+            fd = a.get("_first_dt")
+            if not fd or fd.date() != day:
+                continue
+        lt = s(a.get(C_LEADTYPE)) or LEAD_TYPE_UNIDENTIFIED
+        col_tot[lt] += 1
+        present.add(lt)
+        grand += 1
+    lead_types = _ordered_lead_types(present) or [LEAD_TYPE_UNIDENTIFIED]
     header = ["Lead Type  -  Count (Share %)", "Lead Count"]
+    # Sort the per-type rows by Count (Share %) DESCENDING (highest first); ties
+    # keep the existing business order for deterministic output. The Total row is
+    # returned separately and stays at the bottom.
+    _order_ix = {lt: i for i, lt in enumerate(lead_types)}
+    _ranked = sorted(lead_types,
+                     key=lambda lt: (-int(col_tot.get(lt, 0)), _order_ix[lt]))
     data = []
-    for lt in lead_types:                       # fixed business order (same as tab)
-        cnt = int(col_tot[lt])
+    for lt in _ranked:
+        cnt = int(col_tot.get(lt, 0))
         pshare = (cnt / grand * 100.0) if grand else 0.0
         data.append([f"{lt}  -  {cnt} ({pshare:.1f}%)", cnt])
     total = [f"Total  -  {int(grand)} (100.0%)", int(grand)]
@@ -1960,7 +1971,7 @@ def build_hourly_tab(period_label, period_range, active, day, gen_stamp):
     return t
 
 
-def _leadtype_hourly(active, day=None, include_repeat=False):
+def _leadtype_hourly(active, day=None):
     """Cross-tab of enquiry HOUR -> {Lead Type: count}, restricted to
     Fresh-Relevant (Non-Referral) leads only:
         * Fresh     — first enquiry falls in the period (_is_new)
@@ -1973,8 +1984,8 @@ def _leadtype_hourly(active, day=None, include_repeat=False):
     by = defaultdict(lambda: defaultdict(int))
     hours, present = set(), set()
     for a in active:
-        if not include_repeat and not a.get("_is_new"):
-            continue                          # Fresh only (drop Repeat) unless include_repeat
+        if not a.get("_is_new"):
+            continue                          # Fresh only (drop Repeat leads)
         if is_referral(a):
             continue                          # Non-Referral only
         if not yes(a.get(C_RELEV)):
@@ -2220,7 +2231,7 @@ def build_report(period_label, period_range, df, start, end):
         # Summary, scoped to THIS counsellor's own leads (Fresh + Repeat). Same calc/table/colours
         # as the Hourly tab's share table; placed two columns right of the 3-column
         # Executive Summary (cols A–C), leaving a gap column (D), starting at col E.
-        _sh_header, _sh_data, _sh_total = leadtype_share_rows(leads, day=None, include_repeat=True)
+        _sh_header, _sh_data, _sh_total = leadtype_share_rows(leads, day=None)
         attach_side_table(tb, _exec_title_idx, 4, "Lead Type Share Analysis",
                           _sh_header, _sh_data, _sh_total)
         # Lead Source Performance for THIS counsellor's leads — same structure and
