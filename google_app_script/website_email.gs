@@ -451,6 +451,22 @@
 // }
 
 
+/**
+ * Canonicalise a mobile number to the same 10-digit national format used across
+ * the rest of the IntelliBI system (the Consolidate master and all reports store
+ * the last 10 digits). Strips spaces, "+", dashes, brackets and any country code
+ * (e.g. leading "91" or "0"), keeping the final 10 digits. Returns "" for blanks.
+ * Generic — no per-record special cases.
+ */
+function normalizeMobile_(value) {
+  if (value === null || value === undefined) return "";
+  var digits = String(value).replace(/\D/g, "");   // keep digits only (drops +, spaces, etc.)
+  if (digits.length >= 10) {
+    digits = digits.slice(-10);                     // last 10 = national number (drops 91 / 0 / country code)
+  }
+  return digits;
+}
+
 function doPost(e) {
   try {
     var spreadsheetId = "1prW3GKMnGJZ2U5b0gKjLqTJfczfFTYxUwmWImneDtnE";
@@ -508,6 +524,11 @@ function doPost(e) {
       data.mobileNumber ||
       data.phoneNumber ||
       "";
+    // Cleanse to the canonical 10-digit form the rest of the system uses, so the
+    // Mobile Number is stored consistently (no country code, no "+"/spaces, and
+    // never as a number/float). Applies to the sheet, the notification e-mail and
+    // the required-field check below.
+    mobile = normalizeMobile_(mobile);
 
     var email =
       data.email ||
@@ -606,6 +627,13 @@ function doPost(e) {
       whatsappUpdates,
       formType
     ]);
+
+    // Store the Mobile Number (column C) as TEXT so Sheets never converts the
+    // digits to a number/float (which dropped precision and produced the ".0"
+    // artefacts). Value is the already-normalised 10-digit number.
+    var _mobRange = sheet.getRange(sheet.getLastRow(), 3);
+    _mobRange.setNumberFormat("@");
+    _mobRange.setValue(mobile);
 
     sendAdminNotification(
       enquiryDate,

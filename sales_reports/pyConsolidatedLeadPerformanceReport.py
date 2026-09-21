@@ -805,7 +805,36 @@ def _ml_chance_of(a):
         return -1.0
 
 
-def lead_detail_rows(tab, leads):
+def _lead_detail_rows_plain(tab, leads):
+    """ORIGINAL (pre-ML) lead-detail table: the 16 base columns, no Rank / Priority /
+    Conversion Chance %, sorted by First Enquiry (oldest first). Used ONLY for the
+    Daily report, where all ML output is disabled. Behaviour here is exactly what the
+    report produced before the ML columns were added."""
+    base = LEAD_HEADERS[3:]                 # the 16 original columns (drop the 3 ML ones)
+    tab.header(base, filterable=True)
+    status_ci = len(base) - 1              # 0-based col index of Lead Information Status
+    for a in sorted(leads, key=lambda x: (parse_dt(x.get(C_FIRST)) or datetime.max)):
+        plats = platforms_in_sequence(a)
+        status = lead_info_status(plats)
+        lead_type = s(a.get(C_LEADTYPE)) or LEAD_TYPE_UNIDENTIFIED
+        tab.row([
+            format_journey(a.get(C_HIST)), a.get(C_NAME), a.get(C_MOBILE),
+            a.get(C_REF), city_of(a), lead_type, a.get(C_COURSE),
+            a.get(C_REMARKS), a.get(C_COUNSEL), a.get(C_ADM), a.get(C_RELEV),
+            plats, a["_ninper"], a.get(C_GMEET), a.get(C_WALKSCH),
+            status,
+        ])
+        _ri = len(tab.rows) - 1
+        tab.cell_fills[(_ri, status_ci)] = ((CLR_GREEN, HEX["GREEN"])
+                                            if status == "Completed"
+                                            else (CLR_RED, HEX["RED"]))
+
+
+def lead_detail_rows(tab, leads, ml_on=True):
+    # Daily report: no ML — render the original table (no Rank/Priority/Chance).
+    if not ml_on:
+        _lead_detail_rows_plain(tab, leads)
+        return
     tab.header(LEAD_HEADERS, filterable=True)
     status_ci = len(LEAD_HEADERS) - 1     # 0-based col index of Lead Information Status
     if getattr(tab, "row_fills", None) is None:
@@ -1106,8 +1135,10 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
     # The SAME report as the Follow-Up report's Summary: per-band breakdown over the
     # unique (mobile/email de-duplicated) active leads, using the identical bands,
     # buckets, calculation (lfa._priority_mix_rows), structure and colours. Placed
-    # directly below Counsellor Performance.
-    _add_lead_priority_mix(t, active)
+    # directly below Counsellor Performance. Shown for every report type EXCEPT
+    # Daily (the Daily report has all ML output disabled).
+    if str(period_label).strip() != "Daily":
+        _add_lead_priority_mix(t, active)
 
     t.title("Course Interest")
     t.header(["Course Interested In", "Leads"])
@@ -2128,6 +2159,10 @@ def build_gchart_request(sid, spec):
 
 def build_report(period_label, period_range, df, start, end):
     """Return OrderedDict[tab_name -> Tab]."""
+    # ML outputs (Rank / Priority / Conversion Chance % columns + the Lead Priority
+    # Mix) are shown for every report type EXCEPT Daily. The Daily report renders
+    # the original tables with no ML columns and no Lead Priority Mix.
+    ml_on = (str(period_label).strip() != "Daily")
     active = prepare_active(df, start, end)
     fresh = [a for a in active if a["_is_new"]]           # first enquiry in period
     repeat = [a for a in active if not a["_is_new"]]      # enquired again (first was earlier)
@@ -2156,7 +2191,7 @@ def build_report(period_label, period_range, df, start, end):
     add_report_header(fresh_tab, f"Fresh Lead Details  ({period_label})",
                       period_range, gen_stamp)
     fresh_tab.title(f"Fresh (New) Leads in Period  ({len(fresh)})")
-    lead_detail_rows(fresh_tab, fresh)
+    lead_detail_rows(fresh_tab, fresh, ml_on)
     tabs["Fresh Lead Details"] = fresh_tab
 
     repeat_tab = Tab("Repeat Lead Details")
@@ -2164,7 +2199,7 @@ def build_report(period_label, period_range, df, start, end):
                       period_range, gen_stamp)
     repeat_tab.title(f"Repeat Leads in Period — enquired again via any platform  "
                      f"({len(repeat)})")
-    lead_detail_rows(repeat_tab, repeat)
+    lead_detail_rows(repeat_tab, repeat, ml_on)
     tabs["Repeat Lead Details"] = repeat_tab
 
     groups, disp = group_by_counsellor(active)
@@ -2200,13 +2235,13 @@ def build_report(period_label, period_range, df, start, end):
         cb_repeat = [a for a in leads if not a["_is_new"]]
         tb.title(f"Fresh Lead Details  ({len(cb_fresh)})")
         if cb_fresh:
-            lead_detail_rows(tb, cb_fresh)
+            lead_detail_rows(tb, cb_fresh, ml_on)
         else:
             tb.row(["(no fresh leads in this period)"])
         tb.blank()
         tb.title(f"Repeat Lead Details  ({len(cb_repeat)})")
         if cb_repeat:
-            lead_detail_rows(tb, cb_repeat)
+            lead_detail_rows(tb, cb_repeat, ml_on)
         else:
             tb.row(["(no repeat leads in this period)"])
         tabs[tname] = tb
@@ -3539,21 +3574,30 @@ def run():
     # same 10-digit mobile the model uses. Attaching them as columns means they ride
     # through prepare_active() and mask_dataframe() into every tab and the masked
     # copy. Never fatal: any failure leaves the columns blank (rows show "—").
+    #
+    # ML output is used by every report type EXCEPT Daily, so the model is executed
+    # ONLY when a Weekly or Monthly report is being generated. A Daily-only run runs
+    # no ML model at all.
     global ML_BANDS
-    try:
-        _scores, ML_BANDS, _base = lfa.conversion_scores_for_master(sheets, OUTPUT_DIR)
-        print(f"Conversion model: {len(_scores)} leads scored; "
-              f"base rate {_base*100:.2f}%.")
-        if C_MOBILE in df.columns:
-            _k = df[C_MOBILE].map(lambda v: lfa.digits10(v))
-            df[ML_CHANCE_COL] = _k.map(lambda m: _scores.get(m, {}).get("conversion_chance", ""))
-            df[ML_PRIORITY_COL] = _k.map(lambda m: _scores.get(m, {}).get("priority", ""))
-    except Exception as _e:
-        print("  [ml] conversion scoring skipped (columns left blank):", _e)
-        ML_BANDS = ML_BANDS or lfa.priority_bands(0.05)
-        if C_MOBILE in df.columns:
-            df[ML_CHANCE_COL] = ""
-            df[ML_PRIORITY_COL] = ""
+    _needs_ml = bool(GENERATE_WEEKLY_REPORT or GENERATE_MONTHLY_REPORT)
+    if not _needs_ml:
+        ML_BANDS = None
+        print("Daily-only run: ML model not executed (Daily report has no ML output).")
+    else:
+        try:
+            _scores, ML_BANDS, _base = lfa.conversion_scores_for_master(sheets, OUTPUT_DIR)
+            print(f"Conversion model: {len(_scores)} leads scored; "
+                  f"base rate {_base*100:.2f}%.")
+            if C_MOBILE in df.columns:
+                _k = df[C_MOBILE].map(lambda v: lfa.digits10(v))
+                df[ML_CHANCE_COL] = _k.map(lambda m: _scores.get(m, {}).get("conversion_chance", ""))
+                df[ML_PRIORITY_COL] = _k.map(lambda m: _scores.get(m, {}).get("priority", ""))
+        except Exception as _e:
+            print("  [ml] conversion scoring skipped (columns left blank):", _e)
+            ML_BANDS = ML_BANDS or lfa.priority_bands(0.05)
+            if C_MOBILE in df.columns:
+                df[ML_CHANCE_COL] = ""
+                df[ML_PRIORITY_COL] = ""
 
     # each job: (label, rng, start, end, folder_id, filename, subject, link_name)
     jobs = []
