@@ -1,0 +1,21 @@
+IntelliBI Website Lead Alert - Counsellor setup (one time)
+==========================================================
+1. Copy this whole folder to the counsellor PC (Desktop is fine).
+2. Double-click  Install-Counsellor.bat
+3. In the window that opens, enter:
+     Server URL      :  http://OFFICE-PC-IP:8787     (ask admin for the IP)
+     Your email      :  your Active counsellor email
+     Enrollment code :  the shared code from admin
+4. Done. A tray icon appears; a popup shows on every new website lead.
+   First counsellor to click "Accept" gets the lead; others see who took it.
+
+Active counsellor emails:
+   harishintellibi@gmail.com     (Harish Rathod)
+   salesintellibi03@gmail.com    (Akash Sahu)
+   salesintellibi01@gmail.com    (ArshKhan Pathan)
+   salesintellibi04@gmail.com    (Rajneesh Pandey)
+
+Notes:
+ - The office PC must be ON (roughly 09:30-23:00) for popups to arrive.
+ - The counsellor PC must be on the same office network as the server.
+ - To move to a new PC: right-click the tray icon -> Re-register this computer.
