@@ -75,6 +75,58 @@ def read_source_rows(first_row: int, last_row: int) -> list:
     return out
 
 
+# write-back: stamp the accepting counsellor into the 'Counselling By' column
+_CB_COL_LETTER = None
+
+
+def _col_letter(idx0: int) -> str:
+    s, n = "", idx0 + 1
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _counselling_col() -> str:
+    """A1 column letter of the 'Counselling By' column in the source tab, detected
+    from the header row (case-insensitive) so it survives column reordering. Cached
+    after the first successful lookup. '' if not present/unreadable."""
+    global _CB_COL_LETTER
+    if _CB_COL_LETTER:
+        return _CB_COL_LETTER
+    try:
+        resp = _service().spreadsheets().values().get(
+            spreadsheetId=SETTINGS.source_sheet_id,
+            range=f"'{SETTINGS.source_tab}'!1:1").execute()
+        header = (resp.get("values") or [[]])[0]
+        for i, nm in enumerate(header):
+            if str(nm).strip().lower() == "counselling by":
+                _CB_COL_LETTER = _col_letter(i)
+                return _CB_COL_LETTER
+        print("  [google_io] 'Counselling By' column not found in source header")
+    except Exception as e:
+        print("  [google_io] counselling-col detect failed:", e)
+    return ""
+
+
+def set_counselling_by(row_number: int, counsellor_name: str) -> bool:
+    """Write counsellor_name into the 'Counselling By' cell of the given 1-based row
+    in the source tab. Best-effort; returns True on success, never raises."""
+    col = _counselling_col()
+    if not col or not row_number:
+        return False
+    try:
+        _service().spreadsheets().values().update(
+            spreadsheetId=SETTINGS.source_sheet_id,
+            range=f"'{SETTINGS.source_tab}'!{col}{int(row_number)}",
+            valueInputOption="RAW",
+            body={"values": [[counsellor_name]]}).execute()
+        return True
+    except Exception as e:
+        print("  [google_io] set_counselling_by failed:", e)
+        return False
+
+
 # ── audit/metrics mirror (optional) ──────────────────────────────────────────
 def _ensure_log_header():
     resp = _service().spreadsheets().values().get(

@@ -67,3 +67,23 @@ def escalation_recipients() -> list:
 def is_active_counsellor(email: str) -> bool:
     email = (email or "").strip().lower()
     return any(r["email"].lower() == email for r in active_recipients())
+
+
+def name_for_email(email: str) -> str:
+    """counsellor_name for an emailid from counsellors.json (any section), using the
+    per-section display-name field. '' if not found. Used to stamp 'Counselling By'
+    with the exact name of the counsellor who accepted a lead."""
+    email = (email or "").strip().lower()
+    if not email:
+        return ""
+    cfg = _read()
+    for section, rows in cfg.items():
+        if not isinstance(rows, list):
+            continue
+        name_field = _NAME_FIELD.get(section, "counsellor_name")
+        for rec in rows:
+            if isinstance(rec, dict) and str(rec.get("emailid", "")).strip().lower() == email:
+                nm = str(rec.get(name_field, "")).strip()
+                if nm:
+                    return nm
+    return ""
