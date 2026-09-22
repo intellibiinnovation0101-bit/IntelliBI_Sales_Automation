@@ -48,7 +48,7 @@ Register-ScheduledTask -TaskName $taskName -Action $action `
     -Trigger @($tStart, $tLogon, $tWatch) -Principal $principal `
     -Settings $settings -Description "IntelliBI Website Lead Alert central service" -Force
 
-Write-Host "Registered '$taskName' — runs as SYSTEM at startup, re-checks every 5 min." -ForegroundColor Green
+Write-Host "Registered '$taskName' - runs as SYSTEM at startup, re-checks every 5 min." -ForegroundColor Green
 Write-Host "Starting it now..."
 Start-ScheduledTask -TaskName $taskName
 Write-Host "Done. Health: http://localhost:8787/health   Log: $root\logs\lead_alert_service.log"
