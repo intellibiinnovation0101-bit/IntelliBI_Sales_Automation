@@ -15,6 +15,7 @@ through a queue), so there is no cross-thread Tk access.
 from __future__ import annotations
 
 import webbrowser
+import threading
 
 try:
     import winsound          # Windows only
@@ -37,17 +38,32 @@ class PopupManager:
         self.on_open = on_open            # callback(lead_id)
         self.popups = {}                  # lead_id -> dict
         self._sound_job = None
+        self._playing = False
         self._arm_sound()
 
-    # ── sound: re-beep while any popup is still awaiting action ───────────────
+    # ── sound: LOUD alarm while any popup is still awaiting action ───────────────
+    def _play_alert(self):
+        # Runs on a background thread so the loud pattern never freezes the UI.
+        try:
+            if winsound is not None:
+                # Two-tone siren via the sound-card tone generator (full level,
+                # regardless of the notification-sound scheme), repeated, then the
+                # system exclamation - as loud/noticeable as winsound allows.
+                for _ in range(3):
+                    winsound.Beep(1180, 320)
+                    winsound.Beep(880, 320)
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
+        finally:
+            self._playing = False
+
     def _arm_sound(self):
         active = any(p["state"] == "open" for p in self.popups.values())
-        if active and winsound is not None:
-            try:
-                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-            except Exception:
-                pass
-        self._sound_job = self.root.after(1600, self._arm_sound)
+        if active and winsound is not None and not self._playing:
+            self._playing = True
+            threading.Thread(target=self._play_alert, daemon=True).start()
+        self._sound_job = self.root.after(1500, self._arm_sound)
 
     # ── create / raise ───────────────────────────────────────────────────────
     def show_lead(self, lead: dict, realert: bool = False):

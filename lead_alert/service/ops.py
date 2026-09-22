@@ -125,6 +125,36 @@ async def dispatch_lead(lead: dict) -> bool:
     return True
 
 
+def _write_counselling_by(lead: dict, counsellor_name: str) -> None:
+    """Find THIS lead's row in the source sheet (by its stable content fingerprint)
+    and write the accepting counsellor's name into the 'Counselling By' column.
+    Updates ONLY on an exact single-row match, so a wrong lead can never be updated.
+    Best-effort; never raises."""
+    try:
+        target = lead.get("lead_id")
+        if not target:
+            return
+        sr = lead.get("source_row")
+        if sr:                                   # fast path: the row we dispatched from
+            rows = google_io.read_source_rows(int(sr), int(sr))
+            if rows and build_lead_from_row(rows[0])["lead_id"] == target:
+                google_io.set_counselling_by(int(sr), counsellor_name)
+                return
+        count = google_io.source_row_count()     # fallback: match by fingerprint
+        if not count or count < 2:
+            return
+        rows = google_io.read_source_rows(2, count)
+        hits = [r["_row"] for r in (rows or [])
+                if build_lead_from_row(r)["lead_id"] == target]
+        if len(hits) == 1:
+            google_io.set_counselling_by(hits[0], counsellor_name)
+        else:
+            print(f"  [accept] 'Counselling By' not written: {len(hits)} row "
+                  f"match(es) for {target}")
+    except Exception as e:
+        print("  [accept] 'Counselling By' update error:", e)
+
+
 async def on_accept(device: dict, lead_id: str) -> dict:
     """Atomic single-claim. Broadcast the outcome and return a result dict."""
     email, name = device["counsellor_email"], device["counsellor_name"]
@@ -140,6 +170,11 @@ async def on_accept(device: dict, lead_id: str) -> dict:
         await HUB.send_to_emails(notified, assigned)
         await asyncio.to_thread(google_io.log_upsert, lead,
                                 store.delivery_summary(lead_id))
+        # Stamp the accepting counsellor into the source sheet's 'Counselling By'
+        # column for THIS lead's row (fire-and-forget, best-effort, matched by
+        # content fingerprint). Never delays or breaks the accept response.
+        sheet_name = counsellors.name_for_email(email) or name
+        asyncio.create_task(asyncio.to_thread(_write_counselling_by, lead, sheet_name))
         return {"result": "assigned", "lead_id": lead_id}
     if result == "already":
         lead = store.get_lead(lead_id)
