@@ -3393,7 +3393,7 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
     fresh_nonref_conn = count_fresh_nonref_connected(active)   # Fresh (Non-Ref) Connected
     fresh_rel_nonref = count_fresh_rel_nonref_connected(active)  # Fresh-Relevant (connected)
     rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
-    _comp_pct, _, _ = lead_completion_pct(active)
+    _comp_pct, _comp_done, _comp_total = lead_completion_pct(active)
 
     is_wm = report_type in ("Weekly", "Monthly", "Manual") and start is not None and end is not None
     if is_wm:
@@ -3498,13 +3498,19 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
     # ---- Performance vs Goals (bars, from Option C) ---------------------------
     _tgt = _lead_target if _lead_target else 1
     bars = (_sec("Performance vs Goals")
-            + _bar("Fresh vs Lead Target", f"{fresh_nonref} / {_lead_target}",
+            + _bar("Fresh vs Lead Target",
+                   f"{fresh_nonref} / {_lead_target} &middot; {fresh_nonref / _tgt * 100.0:.0f}%",
                    fresh_nonref / _tgt * 100.0, fresh_hex, 100,
                    "Green when Fresh reaches the period Lead Target")
-            + _bar("Fresh-Relevant %", f"{rel_pct:.0f}%", rel_pct, rel_hex, 80, "Goal: 80%")
-            + _bar("Lead Completion %", f"{_comp_pct:.0f}%", _comp_pct, comp_hex, 90, "Goal: 90%")
-            + _bar("Google Meet &amp; Walk-In %", f"{meet_walk_pct:.0f}%", meet_walk_pct,
-                   meet_walk_hex, 80, "Goal: 80%"))
+            + _bar("Fresh-Relevant %",
+                   f"{fresh_rel_nonref} / {fresh_nonref} &middot; {rel_pct:.0f}%",
+                   rel_pct, rel_hex, 80, "Goal: 80%")
+            + _bar("Lead Completion %",
+                   f"{_comp_done} / {_comp_total} &middot; {_comp_pct:.0f}%",
+                   _comp_pct, comp_hex, 90, "Goal: 90%")
+            + _bar("Google Meet &amp; Walk-In %",
+                   f"{gmeet_sched + walkin_sched} / {relevant_leads} &middot; {meet_walk_pct:.0f}%",
+                   meet_walk_pct, meet_walk_hex, 80, "Goal: 80%"))
 
     # Personalized greeting: the recipient's name (bold, slightly larger) when
     # provided, else the original "Hello Team,". Name is minimally HTML-escaped
