@@ -127,6 +127,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Lead Form')
     .addItem('✅ Validate Mobile Number', 'validateMobileNumber')
+    .addItem('♻️ Reset Form (keep Counselling By)', 'resetForm')
     .addSeparator()
     .addItem('🎨 Re-apply formatting', 'beautifyLeadForm')
     .addItem('🗂️ Set up counsellor tabs', 'setupCounsellorTabs')
@@ -580,7 +581,62 @@ function onLeadFormCheckbox(e) {
     if (col < 2) return;
     // identify our checkbox by the marker text in the cell to its LEFT
     var marker = String(sh.getRange(rng.getRow(), col - 1).getValue()).toLowerCase();
-    if (marker.indexOf('save') === -1 || marker.indexOf('tick') === -1) return;
+    var isTick   = marker.indexOf('tick') !== -1;
+    var isSave   = isTick && marker.indexOf('save')   !== -1;
+    var isReset  = isTick && marker.indexOf('reset')  !== -1;
+    var isSearch = isTick && marker.indexOf('search') !== -1;
+    if (!isSave && !isReset && !isSearch) return;
+
+    // ---- SEARCH checkbox: run the SAME Validate/Search logic, then re-arm ----
+    // A modal pop-up can't be opened from an onEdit trigger, so we run
+    // runValidate() directly (on THIS tab) and show a processing + result toast,
+    // exactly like the Save checkbox. The validate/search logic itself is unchanged.
+    if (isSearch) {
+      try { rng.setValue(false); } catch (ignoreS) {}       // untick -> ready to reuse
+      try {
+        (e.source || SpreadsheetApp.getActiveSpreadsheet())
+          .toast('Searching… Please wait.', 'IntelliBI', -1);   // -1 = stay until replaced
+      } catch (ignoreS2) {}
+      var vres;
+      try {
+        vres = runValidate(sh);                              // same Validate logic, on THIS tab
+      } catch (errS) {
+        vres = { ok: false, kind: 'error', title: 'Search failed',
+                 message: (errS && errS.message) ? errS.message : String(errS) };
+      }
+      try {
+        (e.source || SpreadsheetApp.getActiveSpreadsheet())
+          .toast((vres && vres.message) ? vres.message : 'Done.',
+                 (vres && vres.title) ? vres.title : 'IntelliBI', 5);
+      } catch (ignoreS3) {}
+      return;
+    }
+
+    // ---- RESET checkbox: clear the form (keep Counselling By), then re-arm ----
+    if (isReset) {
+      try { rng.setValue(false); } catch (ignoreR) {}       // untick -> ready to reuse
+      try {
+        resetFormOnSheet_(sh);                              // same reset core as the menu
+        (e.source || SpreadsheetApp.getActiveSpreadsheet())
+          .toast('Form cleared. Counselling By kept unchanged.', 'IntelliBI', 4);
+      } catch (errR) {
+        (e.source || SpreadsheetApp.getActiveSpreadsheet())
+          .toast('Reset error: ' + ((errR && errR.message) ? errR.message : errR),
+                 'IntelliBI', 5);
+      }
+      return;
+    }
+
+    // Processing indicator for the "TICK TO SAVE" action. A modal pop-up (like
+    // the Validate/Submit dialog) cannot be opened from an onEdit trigger, so we
+    // show a PERSISTENT toast with the same "Submitting… Please wait." wording:
+    // it appears the moment the box is ticked, stays visible while runSubmit is
+    // working, and is automatically replaced by the result toast below when the
+    // save completes.
+    try {
+      (e.source || SpreadsheetApp.getActiveSpreadsheet())
+        .toast('Submitting… Please wait.', 'IntelliBI', -1);   // -1 = stay until replaced
+    } catch (ignoreProc) {}
 
     var res;
     try {
@@ -628,36 +684,30 @@ function setupCheckboxSubmit() {
       var ctx = getUiContext_(sh);
       if (ctx && ctx.mobileCell) {
         var r  = ctx.mobileCell.row;                        // the mobile input row
-        // Remove ANY previously-placed "Save" controls on this row first, so
-        // re-running never leaves duplicate buttons scattered across the row.
-        for (var cc = 5; cc <= 60; cc++) {
-          var mk = String(sh.getRange(r, cc).getValue()).toLowerCase();
-          if (mk.indexOf('save') !== -1 && mk.indexOf('tick') !== -1) {
-            sh.getRange(r, cc, 1, 2).clearContent().clearFormat().clearDataValidations();
+        // All three actions are checkbox controls in columns E (label) / F (box),
+        // stacked on the rows just below the contact input row:
+        //   Save   -> E,F of (input row + 1)   [E3/F3 in the standard layout]
+        //   Search -> E,F of (input row + 2)   [E4/F4]
+        //   Reset  -> E,F of (input row + 3)   [E5/F5]
+        // Remove ANY previously-placed Save/Search/Reset controls first (these
+        // rows AND the older F/G positions) so re-running never duplicates them.
+        var base = r + 1;
+        for (var srow = r; srow <= r + 3; srow++) {
+          for (var cc = 5; cc <= 60; cc++) {
+            var mk = String(sh.getRange(srow, cc).getValue()).toLowerCase();
+            if (mk.indexOf('tick') !== -1 &&
+                (mk.indexOf('save')  !== -1 || mk.indexOf('reset') !== -1 ||
+                 mk.indexOf('search') !== -1)) {
+              sh.getRange(srow, cc, 1, 2).clearContent().clearFormat().clearDataValidations();
+            }
           }
         }
-        // Place exactly ONE control at a FIXED position (the form is columns A-D,
-        // so F/G is always clear) - NOT relative to the sheet's right edge, which
-        // grew on every run and caused the duplicate buttons.
-        var labelCell = sh.getRange(r, 6);                  // F = label
-        var boxCell   = sh.getRange(r, 7);                  // G = checkbox
-        // Bright, unmistakable "Save" control: green label -> yellow tick box.
-        labelCell.setValue('✅ TICK TO SAVE ▶')
-                 .setFontFamily(FONT_HEAD).setFontSize(12).setFontWeight('bold')
-                 .setFontColor(WHITE).setBackground('#188038')
-                 .setHorizontalAlignment('center').setVerticalAlignment('middle')
-                 .setWrap(true)
-                 .setBorder(true, true, true, true, false, false,
-                           '#0B5A28', SpreadsheetApp.BorderStyle.SOLID_THICK);
-        boxCell.insertCheckboxes();
-        boxCell.setValue(false);
-        boxCell.setBackground('#FFD400')
-               .setHorizontalAlignment('center').setVerticalAlignment('middle')
-               .setBorder(true, true, true, true, false, false,
-                         '#0B5A28', SpreadsheetApp.BorderStyle.SOLID_THICK);
-        try { sh.setColumnWidth(labelCell.getColumn(), 170); } catch (e) {}
-        try { sh.setColumnWidth(boxCell.getColumn(), 54); } catch (e) {}
-        try { sh.setRowHeight(r, 42); } catch (e) {}
+        // Same shape/size/formatting, distinct hue: green Save, blue Search, red Reset.
+        placeTickControl_(sh, base,     '✅ TICK TO SAVE ▶',   '#188038', '#0B5A28');
+        placeTickControl_(sh, base + 1, '🔍 TICK TO SEARCH ▶', '#1967D2', '#0B3A8B');
+        placeTickControl_(sh, base + 2, '♻️ TICK TO RESET ▶',  '#B7472A', '#7A2E1B');
+        try { sh.setColumnWidth(5, 175); } catch (e) {}     // E = label
+        try { sh.setColumnWidth(6, 54);  } catch (e) {}     // F = checkbox
         tabs++;
       }
     } catch (e2) {}
@@ -665,13 +715,38 @@ function setupCheckboxSubmit() {
   SpreadsheetApp.flush();
   try {
     SpreadsheetApp.getUi().alert('IntelliBI',
-      'Reliable "Tick here to Save" is set up on ' + tabs + ' form tab(s), with calendar ' +
-      'date pickers.\n\nTo save a lead: Validate -> edit fields (pick the Follow-Up Date ' +
-      'from the calendar) -> tick the "TICK HERE TO SAVE" box (to the right of the Mobile ' +
-      'Number). It saves instantly, shows a confirmation, then clears the form.',
+      'Three tick controls are set up on ' + tabs + ' form tab(s) (columns E/F), with ' +
+      'calendar date pickers:\n\n' +
+      '🔍 TICK TO SEARCH  - enter a Mobile Number, then tick to fetch the lead.\n' +
+      '✅ TICK TO SAVE    - after editing, tick to save the lead.\n' +
+      '♻️ TICK TO RESET   - tick to clear the form (keeps Counselling By).\n\n' +
+      'Each box runs its action, then unticks itself. (The old Validate button is no ' +
+      'longer needed - you can delete that drawing.)',
       SpreadsheetApp.getUi().ButtonSet.OK);
   } catch (e3) {}
   return { tabs: tabs };
+}
+
+/** Place one "tick to <action>" control: a coloured label in column E and a
+ *  checkbox in column F on the given row. Identical shape/size/formatting for all
+ *  three actions (Save / Search / Reset); only the label text + colour differ, so
+ *  they match visually while staying easy to tell apart. */
+function placeTickControl_(sh, row, labelText, bgHex, borderHex) {
+  var lab = sh.getRange(row, 5);   // E = label
+  var box = sh.getRange(row, 6);   // F = checkbox
+  lab.setValue(labelText)
+     .setFontFamily(FONT_HEAD).setFontSize(12).setFontWeight('bold')
+     .setFontColor(WHITE).setBackground(bgHex)
+     .setHorizontalAlignment('center').setVerticalAlignment('middle').setWrap(true)
+     .setBorder(true, true, true, true, false, false,
+               borderHex, SpreadsheetApp.BorderStyle.SOLID_THICK);
+  box.insertCheckboxes();
+  box.setValue(false);
+  box.setBackground('#FFD400')
+     .setHorizontalAlignment('center').setVerticalAlignment('middle')
+     .setBorder(true, true, true, true, false, false,
+               borderHex, SpreadsheetApp.BorderStyle.SOLID_THICK);
+  try { sh.setRowHeight(row, 42); } catch (e) {}
 }
 
 function pickFormSheet(ss) {
@@ -735,10 +810,13 @@ function validateMobileNumber() { showOpDialog_('validate'); }
 
 /** Core validate logic — runs inside the popup via google.script.run and
  *  RETURNS a small result object {ok, kind, title, message}. */
-function runValidate() {
+function runValidate(uiSheetOverride) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById(SHEET_ID);
-    var uiSheet = pickFormSheet(ss);
+    // uiSheetOverride lets the "TICK TO SEARCH" checkbox validate on ITS OWN tab
+    // (same pattern as runSubmit). With no argument the behaviour is unchanged
+    // (the popup/menu path still resolves the sheet via pickFormSheet).
+    var uiSheet = uiSheetOverride || pickFormSheet(ss);
     var ctx = getUiContext_(uiSheet);
     if (!ctx.mobileCell) {
       return { ok: false, kind: 'error', title: 'Setup issue',
@@ -1101,6 +1179,53 @@ function resetInputFields_(uiSheet, ctx) {
   var fmuls = uiSheet.getDataRange().getFormulas();     // 1 read -> protect formulas
   applyValueCells_(uiSheet, ctx, function () { return ''; }, fmuls);
   setCounsellingByDefault_(uiSheet, ctx, false);        // re-seed the tab's default
+}
+
+/**
+ * Reset button (menu: "Reset Form", or assign a drawing to resetForm).
+ * Clears every entered/loaded value in the form EXCEPT "Counselling By", which
+ * is kept exactly as it currently is so the counsellor does not have to select
+ * it again. Uses the SAME sheet + field mapping + batched writer as Validate/
+ * Save, so nothing about those flows, the mappings, or any other logic changes.
+ * Dropdowns, cell formatting and any formula cells are preserved (only values
+ * are cleared). The Mobile Number box and all other fields are blanked.
+ */
+function resetForm() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById(SHEET_ID);
+  var uiSheet = pickFormSheet(ss);
+  // Running this straight from the Apps Script editor has no "active tab", so
+  // guard clearly instead of failing on a non-form sheet. In normal use the
+  // "TICK TO RESET" checkbox (below) is what counsellors click — no manual run.
+  if (!uiSheet || !sheetIsForm_(uiSheet)) {
+    try {
+      ss.toast('Open a counsellor lead-form tab, then click Reset (or tick "TICK TO RESET").',
+               'IntelliBI', 6);
+    } catch (e) {}
+    return;
+  }
+  resetFormOnSheet_(uiSheet);
+  try {
+    ss.toast('Form cleared. Counselling By kept unchanged.', 'IntelliBI', 4);
+  } catch (ignore) {}
+}
+
+/**
+ * Core reset used by BOTH resetForm() (menu / manual) and the "TICK TO RESET"
+ * checkbox: on the given form sheet, clear every entered/loaded value EXCEPT the
+ * "Counselling By" field, which is kept exactly as-is. Uses the same field
+ * mapping + batched writer as Validate/Save; dropdowns, formatting and any
+ * formula cells are preserved (only values are cleared).
+ */
+function resetFormOnSheet_(uiSheet) {
+  var ctx = getUiContext_(uiSheet);
+  var fmuls = uiSheet.getDataRange().getFormulas();     // 1 read -> protect formulas
+  applyValueCells_(uiSheet, ctx, function (f) {
+    if (String(f.label).trim().toLowerCase() === 'counselling by') {
+      var row = ctx.values[f.row - 1];
+      return (row && row[f.col - 1] != null) ? row[f.col - 1] : '';
+    }
+    return '';
+  }, fmuls);
 }
 
 // ---- Data sheet read / upsert --------------------------------------------
