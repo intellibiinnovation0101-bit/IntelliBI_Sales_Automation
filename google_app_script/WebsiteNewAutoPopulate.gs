@@ -363,7 +363,7 @@ function setupWebsiteTriggers() {
   var existing = ScriptApp.getProjectTriggers();
   for (var i = 0; i < existing.length; i++) {
     var fn = existing[i].getHandlerFunction();
-    if (fn === 'onWebsiteFormSubmit' || fn === 'onWebsiteEdit' || fn === 'onWebsiteTimer')
+    if (fn === 'onWebsiteFormSubmit' || fn === 'onWebsiteEdit' || fn === 'onWebsiteTimer' || fn === 'onWebsiteDailySync')
       ScriptApp.deleteTrigger(existing[i]);
   }
   var installed = [];
@@ -375,6 +375,14 @@ function setupWebsiteTriggers() {
   // onEdit: keeps manually typed/pasted rows updated instantly.
   ScriptApp.newTrigger('onWebsiteEdit').forSpreadsheet(ss).onEdit().create();
   installed.push('onEdit');
+  // Daily sync: once every morning, re-check EXISTING leads and refresh the
+  // Lead Interaction History where the latest master history has changed
+  // (updates only where required; never creates duplicate entries). This is
+  // what keeps already-populated rows current as more interactions are logged
+  // for a lead AFTER the row was first created. Runs ~06:00 in the Apps Script
+  // project time zone (set it to Asia/Kolkata under Project Settings).
+  ScriptApp.newTrigger('onWebsiteDailySync').timeBased().everyDays(1).atHour(6).create();
+  installed.push('dailySync(06:00)');
   // onFormSubmit: harmless — only fires if a Google Form is ever attached.
   try {
     ScriptApp.newTrigger('onWebsiteFormSubmit').forSpreadsheet(ss).onFormSubmit().create();
@@ -444,4 +452,93 @@ function fillBlankWebsiteHistory_() {
  */
 function backfillBlankWebsiteRows() {
   return fillBlankWebsiteHistory_();
+}
+
+
+// ===========================================================================
+//  DAILY SYNC  -  keep "Lead Interaction History" (AC) current for EXISTING rows
+// ===========================================================================
+/**
+ * Re-check EVERY existing Website row that has a mobile, rebuild the lead's full
+ * interaction history from the latest master ("Consolidate Sales Tracking")
+ * merged with the row's own Website touch, and update the AC cell ONLY when the
+ * freshly-computed history differs from what is already there. This is what keeps
+ * already-populated rows up to date when more interactions are logged for a lead
+ * AFTER the row was first created (the new-lead timer only ever fills BLANK AC
+ * cells, so on its own it never refreshes an existing value).
+ *
+ * Efficiency / GAS-limit safety:
+ *   - reads the Website tab once and the master history once (no per-row opens);
+ *   - rebuilds every row in memory and writes the AC column back in a SINGLE
+ *     setValues() call, and only when at least one cell actually changed;
+ *   - de-dupes by (source, minute) via dedupeHistory_(), so no entry is ever
+ *     duplicated on repeated runs (fully idempotent);
+ *   - if the master history reads back empty (e.g. a transient read problem) it
+ *     ABORTS without writing, so a bad read can never wipe good histories.
+ * Returns the number of rows updated.
+ */
+function syncWebsiteHistory_() {
+  var sh = getWebsiteSheet_();
+  ensureHistoryHeader_(sh);
+  var lastRow = sh.getLastRow(), lastCol = Math.max(sh.getLastColumn(), COL_HISTORY_FALLBACK);
+  if (lastRow < 2) return 0;
+  var grid = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  var header = grid[0];
+
+  var colHist = findCol_(header, [HDR_HISTORY]);
+  colHist = colHist >= 0 ? colHist : (COL_HISTORY_FALLBACK - 1);   // 0-based
+  var cMob  = findCol_(header, ['Mobile Number','Mobile','Phone Number','Phone','Contact Number']);
+  var cTs   = findCol_(header, ['Enquriy Date','Enquiry Date','Timestamp','Time Stamp','Lead Date','Date']);
+  var cCoun = findCol_(header, ['Counselling By','Counseling By','Counsellor']);
+  if (cMob < 0) return 0;
+
+  var masterIdx = readMasterHistory_();
+  // Safety: if the master history came back empty, do NOT rewrite anything -
+  // recomputing from an empty master would shorten every history. Bail out.
+  var hasMaster = false;
+  for (var kk in masterIdx) { if (masterIdx.hasOwnProperty(kk)) { hasMaster = true; break; } }
+  if (!hasMaster) { Logger.log('syncWebsiteHistory_: master history empty - skipping (no rows touched).'); return 0; }
+
+  // Build the new AC column (rows 2..lastRow), seeded from the current values so
+  // rows we do not touch are written back unchanged. Only compute for rows that
+  // have a usable mobile; update the cell only when the value actually changes.
+  var out = [];
+  var changed = 0;
+  for (var r = 1; r < grid.length; r++) {                 // r=1 -> sheet row 2
+    var current = grid[r][colHist];
+    var currentStr = (current === null || current === undefined) ? '' : String(current);
+    var mob = digits10_(grid[r][cMob]);
+    if (!mob) { out.push([current]); continue; }          // no mobile -> leave as-is
+
+    var prev = masterIdx[mob] ? masterIdx[mob].slice() : [];
+    var wDt = cTs >= 0 ? parseDate_(grid[r][cTs]) : null; if (!wDt) wDt = new Date();
+    var wCby = cCoun >= 0 ? s_(grid[r][cCoun]) : '';
+    var combined = dedupeHistory_(prev.concat([{ src: LEAD_SOURCE, dt: wDt, cby: wCby }]));
+    var newStr = cleanHistory_(combined);
+
+    if (newStr !== currentStr) { out.push([newStr]); changed++; }
+    else { out.push([current]); }
+  }
+
+  if (changed > 0) {
+    sh.getRange(2, colHist + 1, out.length, 1).setValues(out);
+    SpreadsheetApp.flush();
+  }
+  Logger.log('syncWebsiteHistory_: updated ' + changed + ' of ' + (grid.length - 1) + ' row(s).');
+  return changed;
+}
+
+/** Time-driven (daily) handler - refreshes existing rows' Lead Interaction
+ *  History. Wrapped so a transient error is logged, never thrown upward. */
+function onWebsiteDailySync() {
+  try {
+    syncWebsiteHistory_();
+  } catch (err) {
+    console.error('onWebsiteDailySync: ' + err);
+  }
+}
+
+/** Optional: run the daily sync on demand (handy for testing from the editor). */
+function syncWebsiteHistoryNow() {
+  return syncWebsiteHistory_();
 }

@@ -91,20 +91,20 @@ def now_ist():
 #                           whole month (1st → last day)
 # When False, the manual GENERATE_DAILY/WEEKLY/MONTHLY/MANUAL flags are used
 # exactly as before.
-GENERATE_AUTO    = True
+GENERATE_AUTO    = False
 
-GENERATE_DAILY   = True
-GENERATE_WEEKLY  = True
-GENERATE_MONTHLY = True
-GENERATE_MANUAL  = False         # Manual = a custom start/end date range
+GENERATE_DAILY   = False
+GENERATE_WEEKLY  = False
+GENERATE_MONTHLY = False
+GENERATE_MANUAL  = True         # Manual = a custom start/end date range
 
 # Optional manual periods (None -> use today / current week / current month).
 DAILY_DATE            = None #'2026-08-22'     # "YYYY-MM-DD"
 WEEKLY_REFERENCE_DATE = None     # any day in the wanted week
 MONTHLY_MONTH         = None     # 1-12
 MONTHLY_YEAR          = None
-MANUAL_START_DATE     = None     # "YYYY-MM-DD"  (required when GENERATE_MANUAL)
-MANUAL_END_DATE       = None     # "YYYY-MM-DD"  (required when GENERATE_MANUAL)
+MANUAL_START_DATE     = "2026-08-21"     # "YYYY-MM-DD"  (required when GENERATE_MANUAL)
+MANUAL_END_DATE       = "2026-09-22"     # "YYYY-MM-DD"  (required when GENERATE_MANUAL)
 
 # ── Source spreadsheets ──────────────────────────────────────────────────────
 RESULT_SHEET_ID  = "1ReJVPl_Y8WnOl_P2sui_uC1jjZXVk0dWqNWRcXGVHCw"   # Active+InActive

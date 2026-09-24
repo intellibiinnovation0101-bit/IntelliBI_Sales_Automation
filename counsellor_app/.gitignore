@@ -1,0 +1,10 @@
+# secrets & local state — never commit
+config.yaml
+credentials/*.json
+data/
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+.pytest_cache/
