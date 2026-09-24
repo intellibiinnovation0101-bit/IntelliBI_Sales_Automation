@@ -57,12 +57,15 @@ def now_ist():
 GENERATE_DAILY_REPORT   = True
 GENERATE_WEEKLY_REPORT   = True
 GENERATE_MONTHLY_REPORT  = True
+GENERATE_MANUAL_REPORT   = False    # Manual = a custom start/end date range (see MANUAL_START_DATE / MANUAL_END_DATE)
 
 # Optional manual report periods (leave as None to use the defaults below).
 DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
 MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
+MANUAL_START_DATE            = None      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
+MANUAL_END_DATE              = None      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
 
 # ── Scheduled-run report selection (scheduler only) ──────────────────────────
 # When this script runs through the scheduled Sales pipeline, run_scheduled.py
@@ -114,6 +117,7 @@ ENROLLED_TAB_NAME = None           # None -> first tab
 DAILY_FOLDER_ID   = "1kuGgoyseH49tiEnwmKBgz8xceF5u7uJP"
 WEEKLY_FOLDER_ID  = "1iUzEaoOS2ViCC7qH4W8Kj-DcXh3RQM_I"
 MONTHLY_FOLDER_ID = "1DICOV0iW5W2oIs7tKvsFfVUKlsfz4TxW"
+MANUAL_FOLDER_ID  = "1tA3J_MeTW3yYLOFQ0u15iM0ISgDbxLVJ"      # dedicated Drive folder id for Manual reports; None -> falls back to the Daily folder
 
 # ---- Auth ----
 # --- IntelliBI Sales Automation portability bootstrap (auto-inserted) ---
@@ -1071,7 +1075,7 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
             (_SEP + "Lead Completion %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
             (f"{_comp_pct:.1f}%", _comp_rgb, _comp_hex),
         ]
-    elif period_label in ("Weekly", "Monthly") and start is not None and end is not None:
+    elif period_label in ("Weekly", "Monthly", "Manual") and start is not None and end is not None:
         # Weekly/Monthly: add per-day averages and colour all four the same way
         # the email does — the two Fresh figures share the Avg-Daily-Fresh vs
         # expected-target verdict (>= expected -> green); the two Relevant figures
@@ -2186,7 +2190,7 @@ def build_report(period_label, period_range, df, start, end):
     # Graphical trend tab, immediately after Summary:
     #   Weekly / Monthly -> day-wise;  Daily -> hourly (by enquiry hour).
     # Then, immediately after it, the Hourly Lead Type Analysis tab (all periods).
-    if period_label in ("Weekly", "Monthly"):
+    if period_label in ("Weekly", "Monthly", "Manual"):
         tabs[DAYWISE_TAB_NAME] = build_daywise_tab(
             period_label, period_range, active, start, end, gen_stamp)
         tabs[LEADTYPE_TAB_NAME] = build_leadtype_hourly_tab(
@@ -2531,6 +2535,8 @@ def _period_folder_name(label, start, end):
         return "Weekly %s to %s" % (start.strftime("%d-%b-%Y"), end.strftime("%d-%b-%Y"))
     if label == "Monthly":
         return "Monthly %s" % start.strftime("%b-%Y")
+    if label == "Manual":
+        return "Manual %s to %s" % (start.strftime("%d-%b-%Y"), end.strftime("%d-%b-%Y"))
     if label == "Daily":
         return "Daily %s" % start.strftime("%d-%b-%Y")
     return label
@@ -3389,7 +3395,7 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
     rel_pct = (fresh_rel_nonref / fresh_nonref * 100.0) if fresh_nonref else 0.0
     _comp_pct, _, _ = lead_completion_pct(active)
 
-    is_wm = report_type in ("Weekly", "Monthly") and start is not None and end is not None
+    is_wm = report_type in ("Weekly", "Monthly", "Manual") and start is not None and end is not None
     if is_wm:
         nd = period_days(start, end)
         avg_daily_fresh = fresh_nonref / nd
@@ -3588,10 +3594,10 @@ def run():
     # copy. Never fatal: any failure leaves the columns blank (rows show "—").
     #
     # ML output is used by every report type EXCEPT Daily, so the model is executed
-    # ONLY when a Weekly or Monthly report is being generated. A Daily-only run runs
+    # ONLY when a Weekly, Monthly or Manual report is being generated. A Daily-only run runs
     # no ML model at all.
     global ML_BANDS
-    _needs_ml = bool(GENERATE_WEEKLY_REPORT or GENERATE_MONTHLY_REPORT)
+    _needs_ml = bool(GENERATE_WEEKLY_REPORT or GENERATE_MONTHLY_REPORT or GENERATE_MANUAL_REPORT)
     if not _needs_ml:
         ML_BANDS = None
         print("Daily-only run: ML model not executed (Daily report has no ML output).")
@@ -3638,6 +3644,28 @@ def run():
                      f"Lead Performance - Monthly - {ms.strftime('%b-%Y')}",
                      f"Monthly Lead Report - {ms.strftime('%b %Y')}",
                      "Monthly Lead Report"))
+    if GENERATE_MANUAL_REPORT and not _SCHED_TRIGGER_TIME:
+        # Manual = a custom [start, end] window from MANUAL_START_DATE / MANUAL_END_DATE.
+        # Same report, tabs, calculations, formatting, email and Drive handling as the
+        # other types; ONLY the reporting window is user-provided. Runs on a manual
+        # execution only (the scheduled pipeline never triggers a Manual report).
+        if not (MANUAL_START_DATE and MANUAL_END_DATE):
+            print("  [manual] GENERATE_MANUAL_REPORT is on but MANUAL_START_DATE / "
+                  "MANUAL_END_DATE are not set - skipping the Manual report.")
+        else:
+            ms = datetime.strptime(MANUAL_START_DATE, "%Y-%m-%d").date()
+            me = datetime.strptime(MANUAL_END_DATE, "%Y-%m-%d").date()
+            if ms > me:
+                print(f"  [manual] MANUAL_START_DATE ({ms}) is after MANUAL_END_DATE "
+                      f"({me}) - skipping the Manual report.")
+            else:
+                st = day_bounds(ms)[0]
+                en = day_bounds(me)[1]
+                rng = f"{ms.strftime('%d-%b-%Y')} to {me.strftime('%d-%b-%Y')}"
+                jobs.append(("Manual", rng, st, en, MANUAL_FOLDER_ID or DAILY_FOLDER_ID,
+                             f"Lead Performance - Manual - {ms.strftime('%d-%b-%Y')} to {me.strftime('%d-%b-%Y')}",
+                             f"Manual Lead Report - {ms.strftime('%d-%b-%Y')} to {me.strftime('%d-%b-%Y')}",
+                             "Manual Lead Report"))
 
     # One run timestamp shared by every report produced in THIS run, appended to
     # each filename so repeated Daily/Weekly/Monthly runs each create a SEPARATE

@@ -841,6 +841,51 @@ def parse_dt(value, dayfirst=False):
         return None
 
 
+_WALKIN_ORDINAL_RE = re.compile(r"(?<=\d)(st|nd|rd|th)\b", re.I)
+
+
+def parse_walkin_dt(value):
+    """Tolerant date parse for a Walk-In 'Timestamp' cell.
+
+    Walk-In timestamps come from a Google Form (US 'M/D/YYYY h:mm:ss') AND from
+    staff who hand-type Indian-style dates ('23-09-2026', '23.09.2026',
+    '14-July-2025', '16-07-2025 : 2 :00', '3rd Sep 2026', Excel serials). Using a
+    fixed dayfirst here misdates them — e.g. dayfirst=False turns '05-09-2026'
+    (5-Sep) into 9-May, and dotted dates fail entirely — so those walk-ins land
+    on the wrong day (or get a '-' placeholder) and drop out of the daily report.
+
+    Rule: choose day/month order by SEPARATOR — '/' is the US Google-Form order
+    (month first); '-' , '.' or a written month is the Indian order (day first).
+    Falls back to the general parse_dt so nothing valid is lost.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    # Excel / Sheets serial number
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime(1899, 12, 30) + timedelta(days=float(value))
+        except Exception:
+            return None
+    s = clean_text(value)
+    if not s or dtparser is None:
+        return None
+    t = re.sub(r"\s*:\s*", ":", s)                 # "2 :00" -> "2:00"
+    t = t.replace("@", " ")
+    t = _WALKIN_ORDINAL_RE.sub("", t)
+    t = re.sub(r"\s+", " ", t).strip(" ,")
+    if not t:
+        return None
+    dayfirst = "/" not in t                        # slash=US(M/D); dash/dot/text=Indian(D/M)
+    for df in (dayfirst, not dayfirst):
+        try:
+            return dtparser.parse(t, dayfirst=df, fuzzy=True)
+        except Exception:
+            continue
+    return parse_dt(s, dayfirst=True)
+
+
 # The team (and every other source: Walk-In / Website / Exotel) reads IST. The
 # WhatsApp/Interakt export gives created_at_utc in UTC, so it must be shifted by
 # +5:30 to line up. All other sources are already IST and are NOT shifted.
@@ -964,7 +1009,7 @@ def load_walkin():
     for _, r in df.iterrows():
         rec = _blank_targets()
         ts_raw = g(r, "Timestamp")
-        dt = parse_dt(ts_raw, dayfirst=False)          # M/D/YYYY
+        dt = parse_walkin_dt(ts_raw)                    # tolerant: US form + Indian hand-typed
         name  = clean_lead_name(g(r, "Full Name"))
         email = clean_email(g(r, "Email Address"))
         phone = norm_phone(g(r, "Mobile Number"))
