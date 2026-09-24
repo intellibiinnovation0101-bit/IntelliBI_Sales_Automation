@@ -91,9 +91,9 @@ def now_ist():
 #                           whole month (1st → last day)
 # When False, the manual GENERATE_DAILY/WEEKLY/MONTHLY/MANUAL flags are used
 # exactly as before.
-GENERATE_AUTO    = False
+GENERATE_AUTO    = True
 
-GENERATE_DAILY   = False
+GENERATE_DAILY   = True
 GENERATE_WEEKLY  = False
 GENERATE_MONTHLY = False
 GENERATE_MANUAL  = True         # Manual = a custom start/end date range
