@@ -148,10 +148,19 @@ def _cmd_check(argv):
     try:
         app = create_app(settings=settings, gateway=None, start_worker=False)
         store = app.state.store
-        print(f"OK — connected. Cached {store.count()} leads; "
-              f"pending writes: {store.pending_count()}.")
+        if getattr(store, "booted_from_cache", False):
+            # The server WOULD come up (from its local snapshot), but Google is
+            # not reachable right now — report that honestly so `check` still
+            # means "Google access is verified".
+            print(f"WARNING — Google Sheets is NOT reachable right now. The server can "
+                  f"still start from its local cache ({store.count()} leads) and will "
+                  f"resync automatically, but check the internet link / sheet sharing.")
+            rc = 1
+        else:
+            print(f"OK — connected. Cached {store.count()} leads; "
+                  f"pending writes: {store.pending_count()}.")
+            rc = 0
         store.close()
-        rc = 0
     except Exception as e:  # noqa: BLE001
         print("FAILED to connect:", e)
         rc = 1

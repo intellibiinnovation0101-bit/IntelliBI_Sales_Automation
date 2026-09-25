@@ -100,15 +100,65 @@ server:
 netsh advfirewall firewall add rule name="IntelliBI Counsellor 8600" dir=in action=allow protocol=TCP localport=8600
 ```
 
-### Start automatically on boot (recommended)
+### Start automatically on boot — fully hands-off (recommended)
 
-Use Task Scheduler so the server comes back after a reboot:
-1. Task Scheduler → **Create Task**.
-2. General: "Run whether user is logged on or not."
-3. Triggers: **At startup**.
-4. Actions: Start a program → browse to `IntelliBICounsellorServer.exe`;
-   "Start in" = its folder.
-5. Settings: "If the task fails, restart every 1 minute."
+Double-click **`Install Auto-Start.bat`** in the `Server` folder once (accept the
+Windows admin prompt). Nothing to download — it uses only built-in Windows
+features, and it is the same proven design as the IntelliBI Lead Alert service
+on the office PC. After it runs, the server:
+
+- **starts by itself whenever the PC boots** — before anyone logs in, with no
+  visible window (a Task Scheduler task running as `SYSTEM`, trigger *at
+  start-up* + *at logon* + a 5-minute re-check tick);
+- **restarts itself if it crashes** (a supervisor, `server_watchdog.ps1`,
+  relaunches it within ~10 s) and **if it hangs** (alive but not answering
+  `/health` for ~2 min, it is killed and relaunched);
+- is never stopped by Windows on its own (the task's "stop after 3 days" default
+  is disabled — this default silently kills long-running tasks; the installer
+  verifies it is off);
+- has its **firewall port open on every network profile** (so a network being
+  re-classified Public does not cut counsellors off);
+- keeps the PC awake: **sleep/hibernate off, Fast Start-up off**, network-adapter
+  power-saving off.
+
+It also starts the server immediately, probes it, and writes **`SERVER
+ADDRESS.txt`** with the URL to give counsellors. Then run **`Verify Server.bat`**
+(all lines should be PASS), reboot once, and run it again — that is the proof
+that the automatic start-up works.
+
+Everyday operations: `Add Counsellor.bat` (adds a login and offers to restart),
+`Restart Server.bat` (after editing `config.yaml`), `Uninstall Auto-Start.bat`.
+Logs: `logs\watchdog.log` (start/stop/restart events) and `logs\server.log`.
+
+> The manual alternative (double-clicking the `.exe`) still works, but then the
+> server only runs while that window is open. Use the installer.
+
+### What can take the URL down while the PC is on — and what is done about it
+
+| Cause | Handled by | Anything left for you / IT |
+|---|---|---|
+| Server crashes or exits | Watchdog restarts it in ~10 s; task also has restart-on-failure | — |
+| Server hangs (alive, not answering) | Watchdog kills + restarts after ~2 min unresponsive | — |
+| PC reboots (Windows Update, power cut) | Task runs at boot, as SYSTEM, no login needed | Put the PC on a UPS; set Windows Update *active hours* to office time |
+| Windows stops long tasks after 3 days | Time limit disabled (installer verifies `PT0S`) | — |
+| PC goes to sleep / hibernates | Timeouts set to *never*, hibernate + Fast Start-up off | Don't press the sleep button; if it's a laptop, lid-close action → *Do nothing* |
+| Firewall blocks the port | Rule added for **all** profiles (Domain/Private/Public) | A third-party firewall/AV must also allow TCP 8600 |
+| Another program grabs port 8600 | Installer warns; watchdog log shows the bind error | Stop that program or change `port:` in `config.yaml` and re-run the installer |
+| **PC's IP address changes** (DHCP) | Counsellor shortcut uses the **PC name**, which follows the PC | Ask IT for a **DHCP reservation / static IP** — the only fully reliable fix; needed if a counsellor PC cannot resolve the name |
+| Internet down while running | Server keeps serving from memory; saves are journaled and pushed later | Depends on the office internet provider |
+| **PC boots while internet is down** | Server boots from its local cache and resyncs when the link returns (requires the rebuilt `.exe`, see below) | Depends on the office internet provider |
+| Google key missing / sheet not shared | `check` / `Verify` fail clearly; watchdog keeps retrying | Fix the key/sharing |
+| Antivirus quarantines the `.exe` | — | Allow-list `IntelliBICounsellorServer.exe` (see §11.7) |
+| Counsellor on a different network/VLAN or Wi-Fi guest network | — | Counsellor PCs must be on the same office LAN (or IT must route/allow TCP 8600) |
+
+**Depends on the office network / internet provider (cannot be fixed in this
+setup):** the office LAN and router being up; counsellor PCs being on the same
+LAN; the internet link for syncing to Google Sheets (the URL itself stays up
+without it); and the DHCP reservation, which only IT/the router can set.
+
+> The offline-boot fallback and the `sheet_ok` health flag are in the app source;
+> run `build_windows.bat` once more and replace the `.exe` to include them. The
+> automatic start-up scripts work with the existing `.exe` as-is.
 
 ## 11.4 Set up a Counsellor machine (no install)
 

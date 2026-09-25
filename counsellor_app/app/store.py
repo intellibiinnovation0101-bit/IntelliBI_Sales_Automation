@@ -18,6 +18,7 @@ outbox, never a second source of truth.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -41,6 +42,11 @@ class Store:
         self._history: Dict[str, List[Dict[str, str]]] = {}   # mobile -> [prior versions, newest first]
         self._loaded = False
         self._last_reconcile_ok = True
+        # True when start-up could not reach Google Sheets and the server came up
+        # from the last local snapshot instead (see bootstrap()). Cleared by the
+        # first successful reconcile(). Surfaced on /health so an admin can see
+        # "serving from cache" vs "fully in sync".
+        self.booted_from_cache = False
         os.makedirs(os.path.dirname(self.s.db_path) or ".", exist_ok=True)
         self._db = sqlite3.connect(self.s.db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
@@ -83,8 +89,29 @@ class Store:
     # ------------------------------------------------------------- bootstrap
     def bootstrap(self):
         """Load current state from Google Sheets, then replay any un-synced
-        journal writes on top so nothing in flight is lost."""
-        active, inactive = self.gw.load()
+        journal writes on top so nothing in flight is lost.
+
+        OFFLINE-BOOT FALLBACK: if Google Sheets cannot be reached at start-up
+        (typically the office PC booting while the internet link is down), the
+        server still comes up from the last snapshot persisted in the local
+        SQLite cache, so counsellors keep their URL, login and data. Saves made
+        meanwhile are journaled as usual and pushed once connectivity returns,
+        and the periodic reconcile() replaces the snapshot with live sheet data
+        at that point. Start-up only fails outright when there is NO snapshot
+        at all (the very first run, before any successful sync).
+        """
+        try:
+            active, inactive = self.gw.load()
+        except Exception as exc:  # noqa: BLE001 - any transport/auth failure
+            if self._load_from_cache():
+                self.booted_from_cache = True
+                self._last_reconcile_ok = False      # stale until reconcile succeeds
+                logging.getLogger(__name__).warning(
+                    "Google Sheets unreachable at start-up (%s); serving from the "
+                    "local cache (%d leads) until the next successful sync.",
+                    exc, len(self._active))
+                return
+            raise                                    # nothing cached -> real failure
         with self._lock:
             self._active = {}
             self._history = {}
@@ -111,6 +138,28 @@ class Store:
             # replay pending journal (un-synced writes) on top of sheet state
             self._replay_pending_locked()
             self._loaded = True
+
+    def _load_from_cache(self) -> bool:
+        """Rebuild the in-memory index from the persisted SQLite snapshot
+        (cache_active / cache_history) and replay un-synced journal writes on
+        top. Returns False when no snapshot exists yet."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT mobile, record_json FROM cache_active").fetchall()
+            if not rows:
+                return False
+            self._active = {r["mobile"]: json.loads(r["record_json"]) for r in rows}
+            hist: Dict[str, List[Dict[str, str]]] = {}
+            for r in self._db.execute(
+                    "SELECT mobile, record_json FROM cache_history "
+                    "ORDER BY version DESC, id DESC").fetchall():
+                hist.setdefault(r["mobile"], []).append(json.loads(r["record_json"]))
+            self._history = hist
+            # the snapshot tables ARE the source right now, so leave them as-is;
+            # keep in-flight (un-synced) saves visible exactly as a normal boot does.
+            self._replay_pending_locked()
+            self._loaded = True
+            return True
 
     def _replay_pending_locked(self):
         rows = self._db.execute(
@@ -300,6 +349,7 @@ class Store:
             self._rebuild_cache_locked()
             self._replay_pending_locked()   # keep in-flight writes visible
             self._last_reconcile_ok = True
+            self.booted_from_cache = False  # live sheet data has replaced any offline snapshot
         return True
 
     def close(self):
