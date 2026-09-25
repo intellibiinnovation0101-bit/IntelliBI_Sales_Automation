@@ -102,9 +102,14 @@ def create_app(settings: Optional[Settings] = None, gateway=None,
 
     @app.get("/health")
     def health():
+        # "sheet_ok" = the last Google Sheets read succeeded. False means the
+        # server is serving from its local snapshot (e.g. it booted while the
+        # internet was down) and will resync automatically when the link returns.
         return {
             "status": "ok",
             "leads_cached": store.count(),
+            "sheet_ok": bool(getattr(store, "_last_reconcile_ok", True)),
+            "booted_from_cache": bool(getattr(store, "booted_from_cache", False)),
             "sync": worker.status(),
         }
 
