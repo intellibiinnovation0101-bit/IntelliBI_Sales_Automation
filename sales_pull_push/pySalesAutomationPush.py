@@ -18,3 +18,8 @@ git merge main --no-edit
 git push origin prod
 
 git checkout dev
+
+
+----------------------------------------------------->
+cd "C:\Users\vaibh\Documents\IntelliBI Automation\IntelliBI_Sales_Automation"
+powershell -ExecutionPolicy Bypass -File .\push_all.ps1 -Message "Sales: what you changed"

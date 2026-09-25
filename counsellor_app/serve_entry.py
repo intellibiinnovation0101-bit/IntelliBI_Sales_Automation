@@ -23,7 +23,13 @@ import sys
 
 def _pause_if_windowed():
     """Keep the console window open when the .exe was double-clicked, so the
-    person can read any message before it closes."""
+    person can read any message before it closes.
+
+    NEVER pauses when running unattended (the auto-start watchdog sets
+    INTELLIBI_NO_PAUSE=1): a background server must exit on error so it can be
+    restarted, not sit forever waiting for a keypress nobody will make."""
+    if os.environ.get("INTELLIBI_NO_PAUSE"):
+        return
     if getattr(sys, "frozen", False) and sys.stdin and sys.stdin.isatty():
         try:
             input("\nPress Enter to close this window...")
