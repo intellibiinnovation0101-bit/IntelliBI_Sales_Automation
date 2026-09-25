@@ -9,7 +9,9 @@ REM  Output: counsellor_app\packaging\dist\IntelliBICounsellorServer.exe
 REM          plus a ready-to-copy "Server" folder next to it.
 REM ===========================================================================
 setlocal
-cd /d "%~dp0\.."                                 REM -> counsellor_app\
+REM Move to counsellor_app\ (the parent of this packaging\ folder).
+REM %~dp0 already ends with a backslash, so do NOT add another one before "..".
+pushd "%~dp0.." || (echo Could not enter the counsellor_app folder. & pause & exit /b 1)
 
 echo(
 echo === [1/5] Checking Python ===
