@@ -1,0 +1,46 @@
+# ===========================================================================
+# IntelliBI Counsellor App — configuration
+# Copy this file to  config.yaml  and edit. Never commit the real config.yaml
+# or the service-account JSON to source control.
+# ===========================================================================
+
+# --- Google Sheet that is the system of record (the existing form Data sheet) --
+data_sheet_id: "1ReJVPl_Y8WnOl_P2sui_uC1jjZXVk0dWqNWRcXGVHCw"
+active_tab: "IntelliBI Lead Information Active"
+active_tab_aliases:
+  - "IntelliBI Lead Information Result"
+inactive_tab: "IntelliBI Lead Information InActive"
+
+# Path to the Google service-account key (share the sheet with its client_email
+# as an Editor). Relative paths are resolved from the project folder.
+service_account_file: "credentials/service_account.json"
+
+# --- performance / durability ---
+db_path: "data/store.db"     # local SQLite cache + write-behind journal
+reconcile_seconds: 300       # re-read the sheet every N seconds (catch outside edits)
+sync_batch_max: 50           # max queued writes flushed to Sheets per cycle
+sync_tick_seconds: 2.0       # how often the background sync runs
+
+# --- security ---
+# Generate with:  python -m app.manage_users secret
+session_secret: "CHANGE_ME_run_manage_users_secret"
+session_hours: 12
+# Optional Google Workspace login (off by default):
+google_oauth_enabled: false
+google_client_id: ""
+allowed_email_domain: "intellibiinnovationstechnologies.in"
+
+# --- server ---
+host: "0.0.0.0"
+port: 8600
+
+# --- counsellor accounts ---
+# Add with:  python -m app.manage_users add <email> "<name>" "<Counselling By>"
+# (that command prompts for the password and writes the bcrypt hash here.)
+counsellors:
+  - email: "counsellor1@intellibiinnovationstechnologies.in"
+    name: "Counsellor One"
+    counselling_by: "Counsellor One"
+    role: "counsellor"
+    password_hash: "REPLACE_WITH_BCRYPT_HASH"
+    active: true
