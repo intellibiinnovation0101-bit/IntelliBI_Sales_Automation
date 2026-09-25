@@ -846,16 +846,26 @@ function runValidate(uiSheetOverride) {
     var rec = findRecord_(dataSheet, key);
 
     if (rec.found) {
+      // The record's OWN (primary) Mobile Number, used to fill the Mobile Number
+      // box. When the search matched on the primary number this equals `key`
+      // (behaviour unchanged); when it matched on the Alternative Mobile Number,
+      // this shows the real primary number instead of the alternate the counsellor
+      // typed — so the form, and any subsequent Save (which keys on this box),
+      // act on the correct lead rather than creating a record under the alt number.
+      var recMobile = rec.map['mobile number'];
+      recMobile = (recMobile !== null && recMobile !== undefined &&
+                   String(recMobile).trim() !== '')
+                    ? normalizeMobile_(recMobile) : key;
       // clear + populate every value cell in a few batched writes
       applyValueCells_(uiSheet, ctx, function (f) {
-        if (f.row === mc.row && f.col === mc.col) return key;
+        if (f.row === mc.row && f.col === mc.col) return recMobile;
         var val = rec.map[f.label.toLowerCase()];
         if (val !== null && val !== undefined && String(val) !== '') return val;
         // blank in the stored record: seed the tab default for Counselling By
         if (f.label.toLowerCase() === 'counselling by') return defaultCounsellingBy_(uiSheet);
         return '';
       });
-      applyWalkInOverlay_(uiSheet, key);   // pre-fill from Walk-In New (additive)
+      applyWalkInOverlay_(uiSheet, recMobile);   // pre-fill from Walk-In New (additive)
       return { ok: true, kind: 'success', title: 'Validation completed successfully.',
         message: 'Record found — you can edit the fields, then Submit.' };
     }
@@ -1294,13 +1304,75 @@ function _cacheRow_(sheet, key, row) {
   try { CacheService.getScriptCache().put(_rowCacheKey_(sheet, key), String(row), 21600); } catch (e) {}
 }
 
-/** Find one record by mobile (Validate). Reads only the header + the one row. */
+/**
+ * Column index (0-based) of the "Alternative Mobile Number" field in a header
+ * row, or -1 if the sheet has no such column. Tolerant of minor naming so the
+ * lookup still works whether the column is titled "Alternative Mobile Number",
+ * "Alternate Mobile Number", "Alt Mobile Number", etc. Uses the same cleaned /
+ * lower-cased comparison as everywhere else (headerIndex_).
+ */
+function altMobileColIndex_(headers) {
+  var candidates = ['alternative mobile number', 'alternate mobile number',
+                    'alternative mobile no', 'alternate mobile no',
+                    'alt mobile number', 'alt mobile no',
+                    'alternative mobile', 'alternate mobile',
+                    'alternative contact number', 'alternate contact number',
+                    'alternative number', 'alternate number'];
+  for (var i = 0; i < candidates.length; i++) {
+    var idx = headerIndex_(headers, candidates[i]);
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+/**
+ * Row number (>=2) of the record whose ALTERNATIVE Mobile Number == key, or -1.
+ * Used ONLY as a fallback when the primary Mobile Number lookup misses.
+ *
+ * Fast + robust to formatting: the Alternative Mobile Number is entered free-form
+ * on the form (it is NOT normalised on save), so a stored value may carry a +91,
+ * a leading 0, spaces, hyphens or brackets. We use a server-side regex TextFinder
+ * whose pattern is the key's digits separated by "\D*" (any run of non-digits),
+ * so "9000000001" also matches "+91 90000-00001", "0 9000000001", "(9000)000001",
+ * etc. — anywhere in the cell. Matches are normally none or one; each candidate is
+ * then confirmed by exact NORMALISED equality, so a longer number that merely
+ * contains the key can never be mistaken for a real match. No full-sheet read:
+ * the finder runs server-side and only the (few) matched cells are inspected.
+ */
+function findRowByAltMobile_(sheet, altCol1, key) {
+  if (!key || altCol1 < 1) return -1;
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  // key is all digits (it came from normalizeMobile_), so nothing to escape.
+  var pattern = String(key).split('').join('\\D*');
+  var matches = sheet.getRange(2, altCol1, lastRow - 1, 1)
+                     .createTextFinder(pattern).matchEntireCell(false)
+                     .useRegularExpression(true).findAll();
+  for (var i = 0; i < matches.length; i++) {
+    if (normalizeMobile_(matches[i].getValue()) === key) return matches[i].getRow();
+  }
+  return -1;
+}
+
+/** Find one record by mobile (Validate). Reads only the header + the one row.
+ *  Primary key is the Mobile Number; if that misses, the Alternative Mobile
+ *  Number column is tried as a fallback (see findRowByAltMobile_). */
 function findRecord_(dataSheet, key) {
   var hdr = readHeaders_(dataSheet);
   if (!hdr.lastCol) return { found: false, map: {}, headers: [], rowIndex: -1 };
   var mCol0 = headerIndex_(hdr.headers, 'mobile number');
   if (mCol0 < 0) return { found: false, map: {}, headers: hdr.headers, rowIndex: -1 };
   var row = findRowByMobile_(dataSheet, mCol0 + 1, key);
+  if (row < 0) {
+    // Primary Mobile Number miss -> try the Alternative Mobile Number column.
+    // This runs ONLY on a miss (a new number, or a deliberate search by an alt
+    // number), so the common "existing primary mobile" search is completely
+    // unchanged and pays nothing extra. The fallback is itself a server-side
+    // TextFinder (no full-sheet read), so even a new-number search adds just one
+    // cheap finder call regardless of how many rows the sheet holds.
+    var aCol0 = altMobileColIndex_(hdr.headers);
+    if (aCol0 >= 0) row = findRowByAltMobile_(dataSheet, aCol0 + 1, key);
+  }
   if (row < 0) return { found: false, map: {}, headers: hdr.headers, rowIndex: -1 };
   var vals = dataSheet.getRange(row, 1, 1, hdr.lastCol).getValues()[0];
   var map = {};
