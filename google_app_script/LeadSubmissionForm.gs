@@ -616,6 +616,10 @@ function onLeadFormCheckbox(e) {
     if (isReset) {
       try { rng.setValue(false); } catch (ignoreR) {}       // untick -> ready to reuse
       try {
+        (e.source || SpreadsheetApp.getActiveSpreadsheet())
+          .toast('Clearing… Please wait.', 'IntelliBI', -1);  // processing; replaced below
+      } catch (ignoreRp) {}
+      try {
         resetFormOnSheet_(sh);                              // same reset core as the menu
         (e.source || SpreadsheetApp.getActiveSpreadsheet())
           .toast('Form cleared. Counselling By kept unchanged.', 'IntelliBI', 4);
@@ -978,8 +982,12 @@ function runSubmit(uiSheetOverride) {
       releaseRecordLock_(recLock);
     }
 
-    // success -> reset the form for the next entry (batched, input values only)
-    resetInputFields_(uiSheet, ctx);
+    // success -> reset the form for the next entry (batched, input values only),
+    // but KEEP the current "Counselling By" so the counsellor need not re-select
+    // it. resetFormOnSheet_ is the same clear-except-Counselling-By core used by
+    // the Reset checkbox (blanks every value cell, preserves the current
+    // Counselling By, protects formulas).
+    resetFormOnSheet_(uiSheet);
     try { uiSheet.getRange(mc.row, mc.col).activate(); } catch (ignore) {}
 
     return { ok: true, kind: 'success', title: 'Submission completed successfully.',

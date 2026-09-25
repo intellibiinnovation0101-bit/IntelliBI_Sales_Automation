@@ -16,11 +16,11 @@ import secrets
 import sys
 
 from . import auth
-from .config import load_settings, _project_root
+from .config import load_settings, base_dir
 
 
 def _config_path():
-    return os.path.join(_project_root(), "config.yaml")
+    return os.path.join(base_dir(), "config.yaml")
 
 
 def cmd_hash():

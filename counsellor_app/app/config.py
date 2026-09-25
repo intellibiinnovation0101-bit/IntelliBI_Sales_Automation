@@ -139,9 +139,27 @@ def _project_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def base_dir() -> str:
+    """Directory that holds config.yaml, credentials/ and data/.
+
+    - Normal (source) run: the project root (counsellor_app/).
+    - Frozen .exe (PyInstaller): the folder the .exe sits in, NOT the temporary
+      unpack dir — so an admin edits config.yaml / drops the service-account key
+      right next to the executable and it is found.
+    An explicit INTELLIBI_APP_HOME env var overrides both.
+    """
+    env_home = os.environ.get("INTELLIBI_APP_HOME")
+    if env_home:
+        return os.path.abspath(env_home)
+    import sys
+    if getattr(sys, "frozen", False):          # running inside a PyInstaller exe
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return _project_root()
+
+
 def load_settings(config_path: Optional[str] = None) -> Settings:
     """Load Settings from config.yaml (if present) then override with env vars."""
-    root = _project_root()
+    root = base_dir()
     cfg = {}
     path = config_path or os.path.join(root, "config.yaml")
     if yaml is not None and os.path.exists(path):
