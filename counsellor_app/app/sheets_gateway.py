@@ -7,6 +7,19 @@ A "save operation" carries the new Active record and (on update) the prior
 version to archive, so applying it to the sheet reproduces the .gs upsert:
     - append the prior version to the InActive tab (RecordVersion, ArchivedAt),
     - overwrite the mobile's Active row (or append if new).
+
+HEADER-ALIGNED WRITES (order-independent, insertion-safe)
+--------------------------------------------------------
+Both reading AND writing map to the sheet's LIVE header row by column NAME, never
+by a fixed position. This means the physical column order can change — a column
+inserted, moved or renamed-elsewhere — without ever misaligning a write. Two
+consequences worth stating:
+  * A column the app does not manage (i.e. any header not in ACTIVE_COLUMNS, e.g.
+    the new "Alternative Mobile Number") is PRESERVED on update and left blank on
+    insert — the app never blanks or corrupts a column it doesn't own.
+  * The prior version archived to InActive is taken from the REAL current Active
+    row (all its columns), so history keeps full fidelity even for columns the
+    app doesn't manage.
 """
 from __future__ import annotations
 
@@ -17,7 +30,7 @@ from . import config
 from .config import (
     ACTIVE_COLUMNS, INACTIVE_COLUMNS, AUDIT_COLUMNS, MOBILE_COL, Settings,
 )
-from .domain import row_from_record, record_from_row, normalize_mobile, now_timestamp
+from .domain import row_from_record, record_from_row, normalize_mobile, now_timestamp, s_
 
 
 @dataclass
@@ -43,6 +56,11 @@ class SheetsGateway:
 
 # --- production implementation (gspread) -------------------------------------
 class GspreadGateway(SheetsGateway):
+    # Fields the app OWNS. Any live-sheet column whose header is NOT in this set
+    # is treated as external (e.g. "Alternative Mobile Number", filled by the
+    # Google-Form/.gs side): it is preserved on update and never written by the app.
+    _MANAGED = set(ACTIVE_COLUMNS)
+
     def __init__(self, settings: Settings):
         self.s = settings
         self._gc = None
@@ -74,6 +92,23 @@ class GspreadGateway(SheetsGateway):
             return self._ss.add_worksheet(title=names[0], rows=1, cols=create_cols)
         return None
 
+    # --- live header helpers (read row 1 fresh; order can change out-of-band) --
+    @staticmethod
+    def _live_header(ws) -> List[str]:
+        """The worksheet's current header row, as a list of cleaned names."""
+        if ws is None:
+            return []
+        return [s_(h) for h in ws.row_values(1)]
+
+    @staticmethod
+    def _row_map(header: List[str], row: List[object]) -> Dict[str, str]:
+        """{header name -> cell value} for one row (first occurrence wins)."""
+        out: Dict[str, str] = {}
+        for i, h in enumerate(header):
+            if h and h not in out:
+                out[h] = s_(row[i]) if i < len(row) else ""
+        return out
+
     def load(self):
         self._connect()
         active_rows = self._active_ws.get_all_values()
@@ -104,29 +139,60 @@ class GspreadGateway(SheetsGateway):
 
     def apply_save(self, op: SaveOp) -> None:
         self._connect()
-        # 1) archive the prior version to InActive
-        if op.archive is not None and self._inactive_ws is not None:
-            arec = dict(op.archive)
-            arec["RecordVersion"] = str(op.version)
-            arec["ArchivedAt"] = now_timestamp()
-            self._inactive_ws.append_row(
-                row_from_record(arec, INACTIVE_COLUMNS),
-                value_input_option="USER_ENTERED")
-        # 2) upsert the Active row for this mobile
-        mcol = ACTIVE_COLUMNS.index(MOBILE_COL) + 1  # 1-based
-        row_vals = row_from_record(op.new_active, ACTIVE_COLUMNS)
+
+        # Live Active header + the mobile's current row (if any). Everything below
+        # is aligned to THIS header by name, so column order/insertions never
+        # misalign a write.
+        header = self._live_header(self._active_ws)
+        if not header:
+            raise RuntimeError("Active tab has no header row.")
+        try:
+            mcol0 = header.index(MOBILE_COL)              # 0-based
+        except ValueError:
+            raise RuntimeError(
+                'Active tab header has no "%s" column.' % MOBILE_COL)
+
         cell = None
         try:
-            cell = self._active_ws.find(op.mobile, in_column=mcol)
+            cell = self._active_ws.find(op.mobile, in_column=mcol0 + 1)
         except Exception:
             cell = None
+
+        existing_row: List[object] = []
         if cell is not None:
+            try:
+                existing_row = self._active_ws.row_values(cell.row)
+            except Exception:
+                existing_row = []
+
+        # 1) archive the prior version to InActive — taken from the REAL current
+        #    Active row so ALL columns (incl. ones the app doesn't manage) are
+        #    preserved in history. Only on update (op.archive signals a prior row).
+        if op.archive is not None and self._inactive_ws is not None and cell is not None:
+            old = self._row_map(header, existing_row)          # prior values, by name
+            old["RecordVersion"] = str(op.version)
+            old["ArchivedAt"] = now_timestamp()
+            iheader = self._live_header(self._inactive_ws)
+            if iheader:
+                irow = [s_(old.get(h, "")) for h in iheader]   # aligned to InActive header
+            else:
+                irow = row_from_record(old, INACTIVE_COLUMNS)  # first-ever row -> our schema
+            self._inactive_ws.append_row(irow, value_input_option="USER_ENTERED")
+
+        # 2) upsert the Active row for this mobile, aligned to the live header.
+        if cell is not None:
+            newrow = []
+            for i, h in enumerate(header):
+                if h in self._MANAGED:
+                    newrow.append(s_(op.new_active.get(h, "")))       # app owns it
+                else:
+                    newrow.append(s_(existing_row[i]) if i < len(existing_row) else "")  # preserve
             self._active_ws.update(
-                f"A{cell.row}",
-                [row_vals],
-                value_input_option="USER_ENTERED")
+                f"A{cell.row}", [newrow], value_input_option="USER_ENTERED")
         else:
-            self._active_ws.append_row(row_vals, value_input_option="USER_ENTERED")
+            newrow = [s_(op.new_active.get(h, "")) if h in self._MANAGED else ""
+                      for h in header]
+            self._active_ws.append_row(newrow, value_input_option="USER_ENTERED")
 
     def ping(self) -> bool:
         try:
