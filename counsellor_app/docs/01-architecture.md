@@ -79,7 +79,7 @@ counsellor_app/
 ├── credentials/               ← put service_account.json here (git-ignored)
 ├── data/                      ← SQLite store.db lives here at runtime (git-ignored)
 ├── docs/                      ← this documentation set
-└── validation/                ← verification suite (pytest; verify_*.py — business rules, store, sync, API, UI)
+└── tests/                     ← pytest suite (domain, store, sync, API, UI)
 ```
 
 ## 1.4 Component responsibilities
