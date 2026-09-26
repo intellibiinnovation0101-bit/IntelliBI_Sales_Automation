@@ -52,9 +52,9 @@ prior versions (InActive tab). It is the intended single writer.
 The app writes rows that are **identical in shape** to what the form writes, so
 downstream processing is unaffected:
 
-- **Active tab** — one row per lead, in this exact 27-column order:
+- **Active tab** — one row per lead, in this exact 28-column order:
 
-  `RecordTimeStamp, Mobile Number, Full Name, Email Address, Candidate Type,
+  `RecordTimeStamp, Mobile Number, Full Name, Alternative Mobile Number, Email Address, Candidate Type,
   Total Years of Experience, Current Domain / Technology, IsGoogleMeetSchedule,
   Course Interested In, IsGoogleMeetScheduleDate, Career Goal, IsWalkInSchedule,
   Current Company Name, IsWalkInScheduleDate, Current City, Admission Plan Time,
@@ -62,12 +62,20 @@ downstream processing is unaffected:
   Counsellor Notes, Graduation / Passing Year, Counselling By, Is Referral,
   Admission Status, Referrer's Name, BackOutReason, Follow-Up Type`
 
-- **InActive tab** — the same 27 columns, prefixed with two audit columns:
+- **InActive tab** — the same 28 columns, prefixed with two audit columns:
   `RecordVersion, ArchivedAt`. Each time a lead is updated, its **previous**
   version is appended here, so the full interaction history is preserved.
 
 Normalisation the app applies (matching the form exactly):
 - **Mobile** is reduced to bare 10 digits (strips `+91` / `0`); used as the key.
+- **Alternative Mobile Number** is stored exactly as entered (the form does the
+  same). Search finds a lead by it too — primary number first, alternative as a
+  fallback, compared on normalised digits — and always shows the lead's real
+  primary number, so Save keys on the right lead.
+
+The app reads AND writes the sheet by **header name**, never by column position,
+and keeps any column it does not know about untouched — so inserting a column in
+the sheet cannot misalign data.
 - **Timestamp** (`RecordTimeStamp`) is `dd-MMM-yyyy HH:mm:ss` in IST
   (Asia/Kolkata), e.g. `05-Oct-2026 14:23:08`.
 - **Date fields** (`Next Follow-Up Date`, `IsGoogleMeetScheduleDate`,

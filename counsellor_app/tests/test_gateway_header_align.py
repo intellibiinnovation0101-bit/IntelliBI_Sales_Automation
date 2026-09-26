@@ -63,7 +63,7 @@ class _FakeWS:
 _ACTIVE_HEADER = [
     "RecordTimeStamp", "Mobile Number", "Full Name", "Candidate Type",
     "Total Years of Experience", "Alternative Mobile Number", "Email Address",
-    "Counselling By", "Admission Status",
+    "Counselling By", "Admission Status", "Source Campaign",   # last one: unknown to the app
 ]
 _INACT_HEADER = ["RecordVersion", "ArchivedAt"] + _ACTIVE_HEADER
 
@@ -85,7 +85,7 @@ def _managed_record(**overrides):
 
 def test_update_preserves_unmanaged_column_and_stays_aligned():
     existing = ["01-Sep-2026 10:00:00", "9876543210", "Old Name", "Fresher", "",
-                "9000000001", "old@x.com", "Harish Rathod", "Follow-Up"]
+                "9000000001", "old@x.com", "Harish Rathod", "Follow-Up", "Diwali-2026"]
     gw = _make_gateway([_ACTIVE_HEADER, existing], [_INACT_HEADER])
 
     op = SaveOp(
@@ -94,19 +94,21 @@ def test_update_preserves_unmanaged_column_and_stays_aligned():
             **{"RecordTimeStamp": "25-Sep-2026 12:00:00",
                "Mobile Number": "9876543210", "Full Name": "New Name",
                "Email Address": "new@x.com", "Candidate Type": "Fresher",
+               "Alternative Mobile Number": "9000000002",
                "Counselling By": "Harish Rathod", "Admission Status": "Interested"}),
         archive={"Mobile Number": "9876543210"}, version=1)
     gw.apply_save(op)
 
     row = dict(zip(_ACTIVE_HEADER, gw._active_ws.grid[1]))
     assert row["Full Name"] == "New Name"                    # managed field updated
-    assert row["Email Address"] == "new@x.com"               # NOT misaligned by col F
-    assert row["Alternative Mobile Number"] == "9000000001"  # unmanaged col preserved
+    assert row["Email Address"] == "new@x.com"               # NOT misaligned by the inserted col
+    assert row["Alternative Mobile Number"] == "9000000002"  # now a managed field: written
+    assert row["Source Campaign"] == "Diwali-2026"           # unknown col preserved
 
 
 def test_update_archives_prior_version_with_full_fidelity():
     existing = ["01-Sep-2026 10:00:00", "9876543210", "Old Name", "Fresher", "",
-                "9000000001", "old@x.com", "Harish Rathod", "Follow-Up"]
+                "9000000001", "old@x.com", "Harish Rathod", "Follow-Up", "Diwali-2026"]
     gw = _make_gateway([_ACTIVE_HEADER, existing], [_INACT_HEADER])
 
     gw.apply_save(SaveOp(
@@ -120,6 +122,7 @@ def test_update_archives_prior_version_with_full_fidelity():
     assert arch["Full Name"] == "Old Name"
     assert arch["Email Address"] == "old@x.com"
     assert arch["Alternative Mobile Number"] == "9000000001"  # history keeps it
+    assert arch["Source Campaign"] == "Diwali-2026"          # ...and unknown cols too
 
 
 def test_insert_leaves_unmanaged_column_blank_and_aligned():
@@ -134,4 +137,5 @@ def test_insert_leaves_unmanaged_column_blank_and_aligned():
     row = dict(zip(_ACTIVE_HEADER, gw._active_ws.grid[-1]))
     assert row["Mobile Number"] == "9811111111"
     assert row["Email Address"] == "fresh@x.com"
-    assert row["Alternative Mobile Number"] == ""            # unmanaged -> blank on insert
+    assert row["Alternative Mobile Number"] == ""            # not supplied -> blank
+    assert row["Source Campaign"] == ""                      # unknown col -> blank on insert

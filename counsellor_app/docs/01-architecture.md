@@ -45,7 +45,7 @@ tab, which is what makes reconciliation trivial and writes conflict-free.
   never loses a write, and neither does the local queue.
 - **Zero disruption.** The app writes rows to the sheet that are
   **byte-compatible** with what `LeadSubmissionForm.gs` writes today — identical
-  27-column schema, identical mobile normalisation, identical timestamp format,
+  28-column schema, identical mobile normalisation, identical timestamp format,
   identical InActive versioning. So `pyConsolidateLeadsLoad.py` and the reports
   keep working with no changes.
 - **Flexibility for the future.** All Google-Sheets access is behind a single
@@ -86,7 +86,7 @@ counsellor_app/
 
 | Module | Responsibility |
 |--------|----------------|
-| `config.py` | Loads `config.yaml` + `INTELLIBI_APP_*` env vars. Holds `ACTIVE_COLUMNS` (the 27-column production schema, verified against the live sheet) and `INACTIVE_COLUMNS`. **Nothing else hard-codes an ID or column.** |
+| `config.py` | Loads `config.yaml` + `INTELLIBI_APP_*` env vars. Holds `ACTIVE_COLUMNS` (the 28-column production schema, verified against the live sheet) and `INACTIVE_COLUMNS`. **Nothing else hard-codes an ID or column.** |
 | `domain.py` | `normalize_mobile`, `is_valid_indian_mobile`, `build_record`, `validate_submission`, date canonicalisation, row⇄record conversion. This is the guarantee that an app-saved lead is identical to a form-saved one. |
 | `sheets_gateway.py` | `GspreadGateway` — the single writer. `load()` reads Active + InActive; `apply_save(op)` archives the prior version to InActive and upserts the Active row by mobile. |
 | `fake_sheets.py` | `FakeGateway` — same interface, in-memory. Lets the full system run and be tested with no credentials and no network. |
@@ -101,7 +101,7 @@ counsellor_app/
 1. Counsellor edits fields in the browser and clicks **Save**.
 2. `POST /api/save` → `store.save()`:
    a. `build_record()` normalises the mobile, stamps the timestamp, canonicalises
-      dates, defaults *Counselling By* — producing a full 27-column record.
+      dates, defaults *Counselling By* — producing a full 28-column record.
    b. `validate_submission()` applies the same rules as the form.
    c. The new record + the prior version (to archive) are written to the SQLite
       **journal** and cache, and the in-memory index is updated — all under one

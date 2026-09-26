@@ -50,16 +50,85 @@ class SaveIn(BaseModel):
     mobile: str
     fields: dict
 
-# Fields rendered as a dropdown in the UI, with their options (kept minimal &
-# data-driven; unknown values are still preserved on save).
-SELECT_FIELDS = {
-    "IsGoogleMeetSchedule": ["", "Yes", "No"],
-    "IsWalkInSchedule": ["", "Yes", "No"],
-    "Is Referral": ["", "Yes", "No"],
-    "Admission Status": ["", "Admitted", "In Progress", "Interested", "Not Interested",
-                          "Irrelevant", "Unable To Connect", "Backed Out"],
-    "Follow-Up Type": ["", "Call", "WhatsApp", "Email", "Walk-In", "Google Meet"],
+# ---------------------------------------------------------------------------
+# Dropdown fields — kept in step with the Google Sheet form automatically.
+#
+# The form presents these fields as dropdowns (data-validation lists). The app
+# must offer the SAME options, spelled exactly the same way, so that what a
+# counsellor picks here is a valid option on the form and in every report.
+#
+# The lists below are the BASE options, confirmed against the live form / Data
+# sheet. At runtime the app adds every value that actually appears in the sheet
+# for that field (Active + history) and, for "Counselling By", every configured
+# counsellor — so a new option added on the form shows up here as soon as it is
+# used, with no code change. Where the sheet's text differs only by case or
+# spacing from a base entry, the sheet's exact text wins (the sheet is the
+# source of truth). Free-text fields (notes, city, company, names, numbers) are
+# deliberately NOT listed here.
+# ---------------------------------------------------------------------------
+YES_NO = ["Yes", "No"]
+SELECT_FIELDS_BASE = {
+    "Candidate Type": ["Working Professional - IT", "Working Professional - Non IT",
+                       "Student - Pursuing", "Fresher - Passed Out", "Career Break",
+                       "Unidentified"],
+    "Total Years of Experience": ["Fresher (0 Years)", "0–1 Year", "1–2 Years",
+                                  "2–3 Years", "3–5 Years", "5–7 Years",
+                                  "7–10 Years", "10–15 Years", "15+ Years"],
+    "Current Domain / Technology": ["Support-IT", "Development - Data/ETL", "Other"],
+    "Course Interested In": ["Azure Data Engineering", "Azure Data Engineering with GenAI",
+                             "Data Analytics with GenAI",
+                             "Advanced Artificial Intelligence (AI) with Generative AI + "
+                             "Agentic AI + Machine Learning(ML)", "Other"],
+    "Career Goal": ["Get Job", "Job Switch", "Salary Hike", "Upskilling", "Project Requirement"],
+    "Admission Plan Time": ["Immediately (Within 1 Week)", "Within 15 Days",
+                            "Just Exploring Options"],
+    "Highest Qualification": ["BA / B.Com", "BCA / BCS", "B.E. (IT, Computer)", "MBA / PGDM"],
+    "IsGoogleMeetSchedule": YES_NO,
+    "IsWalkInSchedule": YES_NO,
+    "Is Referral": YES_NO,
+    "Admission Status": ["Follow-up Pending", "Not Interested", "Unable to Connect",
+                         "Irrelevant"],
+    "BackOutReason": ["No Response", "Course Not Available", "Other"],
+    "Follow-Up Type": ["Initial Follow-Up"],
+    "Counselling By": [],            # filled from the sheet + configured counsellors
 }
+
+# Kept for callers/tests that import the old name: the base lists (no runtime union).
+SELECT_FIELDS = {k: [""] + list(v) for k, v in SELECT_FIELDS_BASE.items()}
+
+
+def _norm_opt(s) -> str:
+    return " ".join(str(s or "").split()).lower()
+
+
+def build_select_options(store, settings) -> dict:
+    """{field: ["", option, ...]} — base options, then every value seen in the
+    sheet for that field (sheet spelling wins), then configured counsellors for
+    Counselling By. Extras are appended alphabetically so the list is tidy."""
+    seen_in_sheet = store.distinct_values(list(SELECT_FIELDS_BASE.keys()))
+    out = {}
+    for field, base in SELECT_FIELDS_BASE.items():
+        sheet_text = {}                                   # norm -> exact sheet text
+        for v in seen_in_sheet.get(field, []):
+            # keep the sheet's text verbatim (only outer whitespace trimmed), so the
+            # app writes precisely the option the form's validation list contains
+            sheet_text.setdefault(_norm_opt(v), str(v).strip())
+        options, used = [""], set()
+        for b in base:
+            k = _norm_opt(b)
+            if not k or k in used:
+                continue
+            options.append(sheet_text.get(k, b))          # prefer the sheet's exact text
+            used.add(k)
+        extras = [v for k, v in sheet_text.items() if k not in used]
+        if field == "Counselling By":
+            for c in getattr(settings, "counsellors", []) or []:
+                cb = " ".join(str(getattr(c, "counselling_by", "") or "").split())
+                if cb and _norm_opt(cb) not in used and _norm_opt(cb) not in {_norm_opt(e) for e in extras}:
+                    extras.append(cb)
+        options.extend(sorted(extras, key=lambda s: s.lower()))
+        out[field] = options
+    return out
 
 
 def create_app(settings: Optional[Settings] = None, gateway=None,
@@ -142,7 +211,7 @@ def create_app(settings: Optional[Settings] = None, gateway=None,
             "columns": ACTIVE_COLUMNS,
             "editable": EDITABLE_FIELDS,
             "date_fields": DATE_FIELDS,
-            "selects": SELECT_FIELDS,
+            "selects": build_select_options(store, settings),   # kept in step with the form
             "mobile_col": MOBILE_COL,
             "timestamp_col": TIMESTAMP_COL,
         }

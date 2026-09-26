@@ -15,7 +15,7 @@ Expected: **all tests pass** (23 at time of writing). What they cover:
 
 | Test file | What it validates |
 |-----------|-------------------|
-| `tests/test_domain.py` | Mobile normalisation (all `+91`/`0` variants), Indian-mobile validation, `build_record` produces the full 27-column schema with normalised mobile + stamped timestamp, date canonicalisation (`2026-10-05 → 05-Oct-2026`), and the exact validation rules from the form (candidate-type requirement, Google-Meet/Walk-In schedule-date rules). |
+| `tests/test_domain.py` | Mobile normalisation (all `+91`/`0` variants), Indian-mobile validation, `build_record` produces the full 28-column schema with normalised mobile + stamped timestamp, date canonicalisation (`2026-10-05 → 05-Oct-2026`), and the exact validation rules from the form (candidate-type requirement, Google-Meet/Walk-In schedule-date rules). |
 | `tests/test_store.py` | Instant in-memory reads, search by mobile/name, versioned saves that archive the prior version to history, validation blocking bad data, new-lead insert, **durability across a simulated restart** (an un-synced write survives), and **reconcile preserving un-synced writes**. |
 | `tests/test_sync.py` | The write-behind worker actually pushes updates to the (fake) sheet, the row written has **exactly the production columns in order**, the prior version is archived to InActive, and a **transient Sheets failure is retried without data loss**. |
 | `tests/test_api.py` | Full HTTP flow via FastAPI's TestClient: auth required, bad login rejected, `/health` open, login → read lead → save → history, date canonicalisation end-to-end, `Counselling By` defaulted from the logged-in user, and validation errors returning HTTP 400. |
@@ -82,7 +82,7 @@ and the downstream pipeline is unaffected.
 - **Mobile column integrity.** Only editable fields are accepted from the
   browser; the mobile key is set server-side from the normalised number, so a
   remark or stray value can never land in the Mobile column.
-- **Full schema every write.** `build_record` always emits all 27 columns in
+- **Full schema every write.** `build_record` always emits all 28 columns in
   order, so a save can't shift or drop columns.
 - **No lost history.** Every update archives the prior version before overwriting
   the Active row.
