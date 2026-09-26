@@ -72,6 +72,10 @@ ALT_MOBILE_COL = "Alternative Mobile Number"
 TIMESTAMP_COL = "RecordTimeStamp"
 
 # Timestamp format used by the existing form (dd-MMM-yyyy HH:mm:ss, IST).
+# Build stamp shown in /health and in the page header, so anyone can confirm
+# WHICH build a server is running (bump it whenever a new .exe is shipped).
+APP_VERSION = "2026.09.26.2"          # live search + results cleared on Open
+
 TIMESTAMP_FMT = "%d-%b-%Y %H:%M:%S"
 TIMEZONE = "Asia/Kolkata"
 

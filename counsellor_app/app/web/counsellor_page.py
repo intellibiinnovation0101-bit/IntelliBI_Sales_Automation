@@ -109,7 +109,7 @@ function renderLogin(err){
 function shell(){
   $("#app").innerHTML=`
    <header><span class="brand">IntelliBI</span>
-     <span class="pill">Counsellor</span><span class="sp"></span>
+     <span class="pill" id="ver" title="build version">Counsellor</span><span class="sp"></span>
      <span class="who" id="who"></span>
      <button class="sec" id="out">Logout</button></header>
    <div class="wrap">
@@ -124,6 +124,7 @@ function shell(){
      <div id="panel"></div>
    </div>`;
   $("#who").textContent=ME.name+"  ·  "+ME.counselling_by;
+  if(ME.version){$("#ver").textContent="Counsellor · v"+ME.version;}
   $("#out").onclick=async()=>{await api("/api/logout",{method:"POST"});renderLogin();};
   const q=$("#q");
   $("#find").onclick=()=>doFind(q.value.trim());

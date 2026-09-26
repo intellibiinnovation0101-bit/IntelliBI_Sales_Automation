@@ -127,7 +127,9 @@ ADDRESS.txt`** with the URL to give counsellors. Then run **`Verify Server.bat`*
 that the automatic start-up works.
 
 Everyday operations: `Add Counsellor.bat` (adds a login and offers to restart),
-`Restart Server.bat` (after editing `config.yaml`), `Uninstall Auto-Start.bat`.
+`Restart Server.bat` (after editing `config.yaml`), `Stop Server.bat` (full stop,
+start-up paused, waits until the `.exe` is unlocked), `Update Server.bat`
+(stop → git pull → restart → version check, §11.6), `Uninstall Auto-Start.bat`.
 Logs: `logs\watchdog.log` (start/stop/restart events) and `logs\server.log`.
 
 > The manual alternative (double-clicking the `.exe`) still works, but then the
@@ -180,11 +182,42 @@ open the login screen in their browser. That's the entire counsellor setup.
 
 ## 11.6 Updating the system later
 
-Because counsellors use a browser, **updates happen only on the server**: build a
-new `.exe`, stop the old one (close its window / stop the scheduled task), replace
-the `.exe` in the `Server` folder (keep `config.yaml`, `credentials\`, `data\`),
-and start it again. Every counsellor gets the update automatically on their next
-page load.
+Because counsellors use a browser, **updates happen only on the server**. The
+office PC runs the server from the repository clone itself
+(`…\IntelliBI_Sales_Automation\counsellor_app\packaging\dist\Server`), so an
+update is: build a new `.exe` on the build PC → push → on the office PC run
+**`Update Server.bat`** (in that `Server` folder, as administrator). It does, in
+the only order that works:
+
+1. `stop_server.ps1` — pauses the start-up task (so its 5-minute trigger cannot
+   bring the server back), kills the watchdog, kills the server as a **process
+   tree** (`taskkill /T` — the one-file `.exe` is a launcher + a child), and waits
+   until no server process is left, the port is free **and the `.exe` file is
+   unlocked**. It prints PASS, or FAIL with the exact process / port owner /
+   lock that is still there. A window that is not elevated fails loudly instead
+   of silently doing nothing.
+2. `git fetch` + `git reset --hard origin/<branch this PC is on>`. Untracked
+   files (`config.yaml`, `credentials\`, `data\`, `logs\`) are never touched.
+3. `restart_server.ps1` — start-up task enabled and started again.
+4. `/health` must report the `APP_VERSION` of the source just pulled; otherwise
+   a warning says the `.exe` in origin was not rebuilt.
+
+If anything fails after the stop, the server is restarted so the office is not
+left without it. The manual equivalent is `Stop Server.bat` → wait for PASS →
+`git reset --hard origin/dev` → `Restart Server.bat`. Never pull while the
+server runs: git cannot replace a locked `.exe` and stops with
+`Unlink of file '…IntelliBICounsellorServer.exe' failed` (answer `n`, stop the
+server properly, run the update again).
+
+**Confirm which build is running.** Every build carries `APP_VERSION`
+(`app/config.py`, bumped whenever a new `.exe` is shipped). It is shown in three
+places: `http://<office-pc>:8600/health` (`"version": "…"`), the output of
+`Verify Server.bat`, and the page header pill ("Counsellor · v…") after login.
+If the version there is older than the one in the source you just built, the
+server is still running the previous `.exe` — the usual causes are pulling while
+the server was running (see above) or an installed `Server` folder outside the
+repository that was not given the new `.exe`. A stale browser page is ruled out
+with a hard reload (Ctrl+F5).
 
 ## 11.7 Troubleshooting
 

@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from . import auth
 from .config import (
     Settings, load_settings, ACTIVE_COLUMNS, EDITABLE_FIELDS, DATE_FIELDS,
-    MOBILE_COL, TIMESTAMP_COL,
+    MOBILE_COL, TIMESTAMP_COL, APP_VERSION,
 )
 from .store import Store
 from .sync import SyncWorker
@@ -176,6 +176,7 @@ def create_app(settings: Optional[Settings] = None, gateway=None,
         # internet was down) and will resync automatically when the link returns.
         return {
             "status": "ok",
+            "version": APP_VERSION,
             "leads_cached": store.count(),
             "sheet_ok": bool(getattr(store, "_last_reconcile_ok", True)),
             "booted_from_cache": bool(getattr(store, "booted_from_cache", False)),
@@ -203,7 +204,7 @@ def create_app(settings: Optional[Settings] = None, gateway=None,
     @app.get("/api/me")
     def me(c=Depends(current_user)):
         return {"email": c.email, "name": c.name, "role": c.role,
-                "counselling_by": c.counselling_by}
+                "counselling_by": c.counselling_by, "version": APP_VERSION}
 
     @app.get("/api/fields")
     def fields(c=Depends(current_user)):

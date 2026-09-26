@@ -60,7 +60,7 @@ copy /y packaging\dist\IntelliBICounsellorServer.exe "%OUT%\" 1>nul
 copy /y config.example.yaml "%OUT%\config.example.yaml" 1>nul
 copy /y packaging\READ_ME_FIRST_Server.txt "%OUT%\READ ME FIRST.txt" 1>nul 2>nul
 REM Automatic start-up + operations scripts (built-in Windows only; see docs\11).
-for %%F in ("Install Auto-Start.bat" "Uninstall Auto-Start.bat" "Verify Server.bat" "Restart Server.bat" "Stop Server.bat" "Add Counsellor.bat" install_autostart.ps1 server_watchdog.ps1 verify_server.ps1 restart_server.ps1 "Create Counsellor Shortcut.bat") do (
+for %%F in ("Install Auto-Start.bat" "Uninstall Auto-Start.bat" "Verify Server.bat" "Restart Server.bat" "Stop Server.bat" "Update Server.bat" "Add Counsellor.bat" install_autostart.ps1 server_watchdog.ps1 verify_server.ps1 restart_server.ps1 stop_server.ps1 update_server.ps1 "Create Counsellor Shortcut.bat") do (
   copy /y "packaging\%%~F" "%OUT%\%%~F" 1>nul 2>nul
 )
 

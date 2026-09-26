@@ -21,13 +21,21 @@ $Port = Get-Port
 
 Write-Host ''
 Write-Host '=== Restarting the IntelliBI Counsellor Server ==='
-Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -like '*server_watchdog.ps1*' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Get-Process -Name 'IntelliBICounsellorServer' -ErrorAction SilentlyContinue |
-    Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 3
+$Stop = Join-Path $Here 'stop_server.ps1'
+if (Test-Path $Stop) {
+    # full stop: task paused, watchdog + server process TREE killed, waits until the
+    # port is free and the .exe is unlocked (see stop_server.ps1)
+    & $Stop -Quiet -TimeoutSec 45
+    if ($LASTEXITCODE -ne 0) { Write-Warning 'The old server did not stop cleanly (see above) - starting anyway.' }
+} else {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*server_watchdog.ps1*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-Process -Name 'IntelliBICounsellorServer' -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+}
 
 Enable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null   # undo Stop Server.bat
 try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop; Write-Host 'Start-up task started (automatic start-up is ON).' }
