@@ -173,10 +173,12 @@ class GspreadGateway(SheetsGateway):
             old["RecordVersion"] = str(op.version)
             old["ArchivedAt"] = now_timestamp()
             iheader = self._live_header(self._inactive_ws)
-            if iheader:
-                irow = [s_(old.get(h, "")) for h in iheader]   # aligned to InActive header
-            else:
-                irow = row_from_record(old, INACTIVE_COLUMNS)  # first-ever row -> our schema
+            if not iheader:
+                # brand-new / empty InActive tab: write a header row FIRST so every
+                # later write (ours or the form's) can align to it by name.
+                self._inactive_ws.append_row(list(INACTIVE_COLUMNS), value_input_option="RAW")
+                iheader = list(INACTIVE_COLUMNS)
+            irow = [s_(old.get(h, "")) for h in iheader]       # aligned to InActive header
             self._inactive_ws.append_row(irow, value_input_option="USER_ENTERED")
 
         # 2) upsert the Active row for this mobile, aligned to the live header.
