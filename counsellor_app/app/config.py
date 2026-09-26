@@ -21,14 +21,21 @@ except Exception:  # pragma: no cover
     yaml = None
 
 
-# --- The production Data-sheet schema (ORDER MATTERS - do not reorder) --------
+# --- The production Data-sheet schema ------------------------------------------
 # This is the header row of "IntelliBI Lead Information Active", verified against
-# the live sheet (27 columns). The InActive tab is the SAME columns prefixed with
-# the two audit columns below.
+# the live sheet (28 columns; "Alternative Mobile Number" sits right after
+# "Full Name", matching the form's C4/D4 field). The InActive tab is the SAME
+# columns prefixed with the two audit columns below.
+#
+# This list is the set of fields the app KNOWS (shows, edits, saves). Reads and
+# writes to the sheet are aligned by header NAME (see sheets_gateway.py), so the
+# physical column order of the sheet may change without breaking anything; keep
+# this order anyway because it is the order the UI displays the fields in.
 ACTIVE_COLUMNS: List[str] = [
     "RecordTimeStamp",
     "Mobile Number",
     "Full Name",
+    "Alternative Mobile Number",
     "Email Address",
     "Candidate Type",
     "Total Years of Experience",
@@ -59,6 +66,9 @@ AUDIT_COLUMNS: List[str] = ["RecordVersion", "ArchivedAt"]
 INACTIVE_COLUMNS: List[str] = AUDIT_COLUMNS + ACTIVE_COLUMNS
 
 MOBILE_COL = "Mobile Number"
+# Secondary number: Search also finds a lead by this (mirrors the form's
+# "TICK TO SEARCH", which falls back to it when the primary number misses).
+ALT_MOBILE_COL = "Alternative Mobile Number"
 TIMESTAMP_COL = "RecordTimeStamp"
 
 # Timestamp format used by the existing form (dd-MMM-yyyy HH:mm:ss, IST).

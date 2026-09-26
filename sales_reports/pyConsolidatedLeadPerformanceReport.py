@@ -54,18 +54,18 @@ def now_ist():
 # ============================================================
 # REPORT GENERATION CONFIGURATION
 # ============================================================
-GENERATE_DAILY_REPORT   = True
-GENERATE_WEEKLY_REPORT   = True
-GENERATE_MONTHLY_REPORT  = True
-GENERATE_MANUAL_REPORT   = False    # Manual = a custom start/end date range (see MANUAL_START_DATE / MANUAL_END_DATE)
+GENERATE_DAILY_REPORT   = False
+GENERATE_WEEKLY_REPORT   = False
+GENERATE_MONTHLY_REPORT  = False
+GENERATE_MANUAL_REPORT   = True    # Manual = a custom start/end date range (see MANUAL_START_DATE / MANUAL_END_DATE)
 
 # Optional manual report periods (leave as None to use the defaults below).
 DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
 MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
-MANUAL_START_DATE            = None      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
-MANUAL_END_DATE              = None      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
+MANUAL_START_DATE            = "2026-09-01"      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
+MANUAL_END_DATE              = "2026-09-25"      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
 
 # ── Scheduled-run report selection (scheduler only) ──────────────────────────
 # When this script runs through the scheduled Sales pipeline, run_scheduled.py

@@ -24,7 +24,7 @@ import sqlite3
 import threading
 from typing import Dict, List, Optional, Tuple
 
-from .config import Settings, MOBILE_COL, EDITABLE_FIELDS
+from .config import Settings, MOBILE_COL, ALT_MOBILE_COL, EDITABLE_FIELDS
 from .domain import (
     build_record, validate_submission, normalize_mobile, is_valid_indian_mobile,
     lt_norm,
@@ -192,14 +192,43 @@ class Store:
         self._db.commit()
 
     # ------------------------------------------------------------------- reads
+    def _find_by_alt_locked(self, digits: str) -> Optional[str]:
+        """Primary mobile of the lead whose Alternative Mobile Number normalises
+        to `digits`, or None. Mirrors the form's TICK TO SEARCH fallback: the
+        alternate number is stored free-form (+91 / 0 / spaces), so compare on
+        normalised digits. Only consulted when the primary lookup misses; the
+        scan is over the in-memory index, so it is sub-millisecond."""
+        if not digits:
+            return None
+        for m, rec in self._active.items():
+            alt = rec.get(ALT_MOBILE_COL, "")
+            if alt and normalize_mobile(alt) == digits:
+                return m
+        return None
+
+    def resolve_mobile(self, mobile: str) -> str:
+        """The primary mobile a typed number refers to: itself if it is a known
+        primary number, else the primary of the lead that has it as the
+        Alternative Mobile Number, else the normalised input unchanged."""
+        m = normalize_mobile(mobile)
+        with self._lock:
+            if m in self._active:
+                return m
+            return self._find_by_alt_locked(m) or m
+
     def get(self, mobile: str) -> Optional[Dict[str, str]]:
         m = normalize_mobile(mobile)
         with self._lock:
             rec = self._active.get(m)
+            if rec is None:
+                # fall back to the Alternative Mobile Number (same as the form);
+                # the record returned carries the lead's REAL primary number.
+                pm = self._find_by_alt_locked(m)
+                rec = self._active.get(pm) if pm else None
             return dict(rec) if rec else None
 
     def history(self, mobile: str) -> List[Dict[str, str]]:
-        m = normalize_mobile(mobile)
+        m = self.resolve_mobile(mobile)
         with self._lock:
             return [dict(r) for r in self._history.get(m, [])]
 
@@ -207,18 +236,37 @@ class Store:
         return self.get(mobile) is not None
 
     def search(self, term: str, limit: int = 20) -> List[Dict[str, str]]:
-        """Search by mobile fragment or a name/email substring."""
+        """Search by mobile fragment (primary OR alternative number) or a
+        name/email substring."""
         t = lt_norm(term)
         tdig = normalize_mobile(term)
         out = []
         with self._lock:
             for m, rec in self._active.items():
-                if (tdig and tdig in m) or \
+                alt_digits = normalize_mobile(rec.get(ALT_MOBILE_COL, "")) if tdig else ""
+                if (tdig and (tdig in m or (alt_digits and tdig in alt_digits))) or \
                    (t and (t in lt_norm(rec.get("Full Name")) or
                            t in lt_norm(rec.get("Email Address")))):
                     out.append(dict(rec))
                     if len(out) >= limit:
                         break
+        return out
+
+    def distinct_values(self, fields: List[str]) -> Dict[str, List[str]]:
+        """{field: [distinct non-blank values, first-seen order]} across the
+        current records AND their history — used to keep the app's dropdowns in
+        step with the options actually used on the Google Sheet form."""
+        out: Dict[str, List[str]] = {f: [] for f in fields}
+        seen: Dict[str, set] = {f: set() for f in fields}
+        with self._lock:
+            sources = [self._active.values()] + list(self._history.values())
+            for recs in sources:
+                for rec in recs:
+                    for f in fields:
+                        v = str(rec.get(f, "") or "").strip()
+                        if v and v not in seen[f]:
+                            seen[f].add(v)
+                            out[f].append(v)
         return out
 
     def count(self) -> int:

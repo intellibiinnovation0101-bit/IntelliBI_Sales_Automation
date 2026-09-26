@@ -32,10 +32,17 @@ case you roll back the code and restart.
 The schema lives in **one place**: `ACTIVE_COLUMNS` in `app/config.py`. If a
 column is added/renamed/reordered in the sheet (and in `LeadSubmissionForm.gs`):
 
-1. Update `ACTIVE_COLUMNS` to match the new header exactly (order matters).
-2. If the new field is counsellor-editable, it automatically appears in the UI
-   (add it to `SELECT_FIELDS` in `app/server.py` if it should be a dropdown, or
-   to `DATE_FIELDS` in `config.py` if it's a date).
+1. Add the new field to `ACTIVE_COLUMNS` (put it where the sheet has it; the
+   list is also the UI display order). Reads/writes are matched by header NAME,
+   so a column added in the sheet never shifts existing data.
+2. If the new field is counsellor-editable, it automatically appears in the UI.
+   If the form shows it as a dropdown, add it to `SELECT_FIELDS_BASE` in
+   `app/server.py` with the options confirmed on the form; if it's a date, add
+   it to `DATE_FIELDS` in `config.py`.
+   **Dropdown options track the form automatically**: at runtime the app offers
+   the base list PLUS every value actually present in the sheet for that field
+   (sheet spelling wins), and every configured counsellor for *Counselling By* —
+   so adding/renaming an option on the form needs no code change once it's in use.
 3. If it has a validation rule, add it to `validate_submission` in `app/domain.py`
    to keep parity with the form.
 4. Run the tests and update expectations if needed.
