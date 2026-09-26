@@ -45,7 +45,7 @@ maintain, and troubleshoot the system independently.
 5. [`docs/05-google-sheets.md`](docs/05-google-sheets.md) — Google Sheets / API configuration
 6. [`docs/06-running.md`](docs/06-running.md) — how to run the system
 7. [`docs/07-deployment.md`](docs/07-deployment.md) — step-by-step deployment guide
-8. [`docs/08-testing.md`](docs/08-testing.md) — testing & validation
+8. [`docs/08-validation.md`](docs/08-validation.md) — validation suite
 9. [`docs/09-troubleshooting.md`](docs/09-troubleshooting.md) — troubleshooting
 10. [`docs/10-maintenance.md`](docs/10-maintenance.md) — maintenance & future enhancements
 

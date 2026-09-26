@@ -1,6 +1,13 @@
+"""
+Verification of sales_reports/lead_conversion_model.py (the self-learning
+Conversion Chance % model): metric helpers, validation gate and scorer output.
+
+Run from the project root (needs the project venv with scikit-learn):
+    python sales_validation\\verify_lead_conversion_model.py
+"""
 import sys, os, random, tempfile
 from datetime import datetime, timedelta
-sys.path.insert(0, ".")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sales_reports"))
 import lead_conversion_model as ml
 
 fails=[]

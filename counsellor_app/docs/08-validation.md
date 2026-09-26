@@ -15,11 +15,11 @@ Expected: **all tests pass** (23 at time of writing). What they cover:
 
 | Test file | What it validates |
 |-----------|-------------------|
-| `tests/test_domain.py` | Mobile normalisation (all `+91`/`0` variants), Indian-mobile validation, `build_record` produces the full 28-column schema with normalised mobile + stamped timestamp, date canonicalisation (`2026-10-05 → 05-Oct-2026`), and the exact validation rules from the form (candidate-type requirement, Google-Meet/Walk-In schedule-date rules). |
-| `tests/test_store.py` | Instant in-memory reads, search by mobile/name, versioned saves that archive the prior version to history, validation blocking bad data, new-lead insert, **durability across a simulated restart** (an un-synced write survives), and **reconcile preserving un-synced writes**. |
-| `tests/test_sync.py` | The write-behind worker actually pushes updates to the (fake) sheet, the row written has **exactly the production columns in order**, the prior version is archived to InActive, and a **transient Sheets failure is retried without data loss**. |
-| `tests/test_api.py` | Full HTTP flow via FastAPI's TestClient: auth required, bad login rejected, `/health` open, login → read lead → save → history, date canonicalisation end-to-end, `Counselling By` defaulted from the logged-in user, and validation errors returning HTTP 400. |
-| `tests/test_counsellor_page_search.py` | Browser test (Playwright/Chromium against the real app on a fake sheet): matching leads appear while typing in the search box without Enter/Find, the list narrows as the term changes, it is cleared the moment a lead is opened, Enter with a full mobile still opens the record directly, and Save works from a lead opened via a suggestion. Skipped automatically when Playwright is not installed. |
+| `validation/verify_business_rules.py` | Mobile normalisation (all `+91`/`0` variants), Indian-mobile validation, `build_record` produces the full 28-column schema with normalised mobile + stamped timestamp, date canonicalisation (`2026-10-05 → 05-Oct-2026`), and the exact validation rules from the form (candidate-type requirement, Google-Meet/Walk-In schedule-date rules). |
+| `validation/verify_lead_store.py` | Instant in-memory reads, search by mobile/name, versioned saves that archive the prior version to history, validation blocking bad data, new-lead insert, **durability across a simulated restart** (an un-synced write survives), and **reconcile preserving un-synced writes**. |
+| `validation/verify_sheet_sync_worker.py` | The write-behind worker actually pushes updates to the (fake) sheet, the row written has **exactly the production columns in order**, the prior version is archived to InActive, and a **transient Sheets failure is retried without data loss**. |
+| `validation/verify_web_api.py` | Full HTTP flow via FastAPI's TestClient: auth required, bad login rejected, `/health` open, login → read lead → save → history, date canonicalisation end-to-end, `Counselling By` defaulted from the logged-in user, and validation errors returning HTTP 400. |
+| `validation/verify_counsellor_page_search.py` | Browser test (Playwright/Chromium against the real app on a fake sheet): matching leads appear while typing in the search box without Enter/Find, the list narrows as the term changes, it is cleared the moment a lead is opened, Enter with a full mobile still opens the record directly, and Save works from a lead opened via a suggestion. Skipped automatically when Playwright is not installed. |
 
 ## 8.2 Performance validation
 
@@ -96,6 +96,6 @@ Re-run with more detail:
 ```bash
 python -m pytest -vv
 ```
-A failure in `test_domain` usually means a business-rule expectation changed —
-compare against `LeadSubmissionForm.gs`. A failure in `test_store`/`test_sync`
+A failure in `verify_business_rules` usually means a business-rule expectation changed —
+compare against `LeadSubmissionForm.gs`. A failure in `verify_lead_store`/`verify_sheet_sync_worker`
 points at the durability/sync path. See `docs/09-troubleshooting.md`.

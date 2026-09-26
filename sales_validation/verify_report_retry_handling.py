@@ -1,11 +1,11 @@
 """
-Regression tests for the production-failure fix in the Sales report layer:
+Verification of the production-failure handling in the Sales report layer:
 transient Google/SMTP errors are retried, a retry never duplicates a Drive file
 or an e-mail, one failed report never aborts the others, and the pipeline runner
 re-runs a script only when nothing was delivered yet.
 
-Run from the project root (no pytest needed):
-    python tests\\test_report_retry.py
+Run from the project root (no extra packages needed):
+    python sales_validation\\verify_report_retry_handling.py
 """
 import os
 import sys

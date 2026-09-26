@@ -116,4 +116,4 @@ For a quick non-serving diagnosis of sheet connectivity and lead count:
 python run.py --check
 ```
 If a specific save is misbehaving, reproduce it in `--fake` mode (no risk to real
-data) and, if needed, add a focused test in `tests/` mirroring the case.
+data) and, if needed, add a focused check in `validation/` mirroring the case.
