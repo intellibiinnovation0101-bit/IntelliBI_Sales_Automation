@@ -40,6 +40,7 @@ IntelliBI_Sales_Automation/
 ├── sales_data_collection/   Layer 1 entry scripts
 ├── sales_consolidation/     Layer 2 entry script
 ├── sales_reports/           Layer 3 entry scripts
+├── sales_validation/        verify_*.py — offline verification of retry handling / conversion model
 ├── common/                  shared code + portability layer
 │   ├── paths.py             PROJECT_ROOT + all canonical folders (pathlib)
 │   ├── _bootstrap.py        sys.path + env defaults + config.yaml (imported first by every script)

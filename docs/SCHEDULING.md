@@ -99,7 +99,7 @@ handle this as follows (tunables in `config.yaml` → `pipeline:`).
    because a second run would duplicate the reports and e-mails already sent. The
    failure still surfaces in the completion e-mail for follow-up.
 
-Regression test: `python tests\test_report_retry.py` (no Google access needed).
+Verification script: `python sales_validation\verify_report_retry_handling.py` (no Google access needed).
 
 ## Change history
 - 2026-08-24 — Added scheduling (5×/day, overlap-protected) via `run_scheduled.py` + `setup_schedule.ps1`.

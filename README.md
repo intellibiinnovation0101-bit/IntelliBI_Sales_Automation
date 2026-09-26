@@ -54,6 +54,7 @@ IntelliBI_Sales_Automation/
 ├── sales_data_collection/   Layer 1: pyInteraktUsers, pyExotelInboxScrape, pyExotelCallDetails
 ├── sales_consolidation/     Layer 2: pyConsolidateLeadsLoad
 ├── sales_reports/           Layer 3: pyConsolidatedLeadPerformanceReport, pyLeadFollowUpAnalysisReport
+├── sales_validation/        verification scripts run by hand before a release (retry handling, conversion model)
 ├── common/                  shared code: paths, config_loader, logging_utils, common_utils,
 │                            _bootstrap  +  the pipeline's shared modules (utils, interakt_*, exotel_*)
 ├── config/                  config.yaml, logging_config.yaml
