@@ -281,9 +281,9 @@
    'C:\\Users\\vaibh\\Documents\\IntelliBI '
    'Automation\\IntelliBI_Sales_Automation\\counsellor_app\\app\\web\\__init__.py',
    'PYMODULE'),
-  ('app.web.ui',
+  ('app.web.counsellor_page',
    'C:\\Users\\vaibh\\Documents\\IntelliBI '
-   'Automation\\IntelliBI_Sales_Automation\\counsellor_app\\app\\web\\ui.py',
+   'Automation\\IntelliBI_Sales_Automation\\counsellor_app\\app\\web\\counsellor_page.py',
    'PYMODULE'),
   ('argparse',
    'C:\\Users\\vaibh\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\argparse.py',
