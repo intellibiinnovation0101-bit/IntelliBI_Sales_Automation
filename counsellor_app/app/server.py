@@ -34,7 +34,7 @@ from .config import (
 from .store import Store
 from .sync import SyncWorker
 from .sheets_gateway import GspreadGateway
-from .web.ui import INDEX_HTML
+from .web.counsellor_page import INDEX_HTML
 
 log = logging.getLogger("counsellor_app")
 

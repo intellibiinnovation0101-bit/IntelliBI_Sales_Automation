@@ -79,6 +79,18 @@ _QUOTA_RE = re.compile(
     r"\b429\b|Quota exceeded|rateLimitExceeded|userRateLimitExceeded|"
     r"RESOURCE_EXHAUSTED|Rate Limit Exceeded|quotaExceeded", re.IGNORECASE)
 
+# Exit code a script returns when it failed BEFORE delivering anything (no Drive
+# upload, no e-mail) — the one case where re-running the whole script is safe.
+# The report scripts (pyConsolidatedLeadPerformanceReport / pyLeadFollowUpAnalysisReport)
+# return it from their EXIT_RETRYABLE; a partial delivery returns 1 and is never re-run.
+RC_RETRYABLE = 3
+
+# Evidence in a script's output that it already delivered something (uploaded a
+# report to Drive or sent an e-mail). A script whose output shows any of these is
+# NEVER re-run automatically — a second run would duplicate reports / e-mails.
+_DELIVERED_RE = re.compile(
+    r"\[email\] sent to|\bcreated: https://|\breplaced: https://|masked copy: https://")
+
 
 def _run_script_once(script_path, log, env, timeout) -> dict:
     started_dt = datetime.now()
@@ -120,6 +132,7 @@ def _run_script_once(script_path, log, env, timeout) -> dict:
         "counts": extract_counts(text),
         "error": error,
         "is_quota": rc != 0 and bool(_QUOTA_RE.search(text)),
+        "delivered": bool(_DELIVERED_RE.search(text)),
         "text": text,
     }
 
@@ -136,7 +149,18 @@ def run_script(script_path, logger=None, extra_env=None, label=None,
     is retried up to `retries` times after `retry_wait` seconds (+ jitter). This
     absorbs the shared-service-account rate limit hit when run_all launches
     several reports in parallel (the per-minute quota resets, so a short wait
-    lets the retry succeed). Non-quota failures are NOT retried.
+    lets the retry succeed).
+
+    A script that exits with RC_RETRYABLE (3) — "failed before anything was
+    delivered" (source sheet unreadable, auth, Google outage …) — is re-run up to
+    pipeline.report_retries times (default 2) after
+    pipeline.report_retry_wait_seconds (default 300s, + jitter), because nothing
+    was uploaded or e-mailed yet so a re-run cannot duplicate anything.
+
+    Any run whose output shows that a report WAS already uploaded or e-mailed is
+    never re-run automatically (even on a quota error): re-running would send the
+    delivered reports again. Such a partial failure is logged with its cause and
+    surfaces in the completion e-mail for follow-up. Other failures are NOT retried.
     """
     script_path = Path(script_path)
     name = script_path.stem
@@ -155,25 +179,56 @@ def run_script(script_path, logger=None, extra_env=None, label=None,
         except (TypeError, ValueError):
             retry_wait = 70
 
+    try:
+        report_retries = int(config_loader.get("pipeline.report_retries", 2) or 0)
+    except (TypeError, ValueError):
+        report_retries = 2
+    try:
+        report_wait = int(config_loader.get("pipeline.report_retry_wait_seconds", 300) or 300)
+    except (TypeError, ValueError):
+        report_wait = 300
+
     env = dict(os.environ)
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items()})
 
-    attempt = 0
+    attempt = 0          # quota (429) re-runs
+    rattempt = 0         # "nothing delivered yet" (rc=3) re-runs
     while True:
-        tag = label + (f"  (retry {attempt}/{retries})" if attempt else "")
+        tag = label + (f"  (retry {attempt + rattempt}/{retries + report_retries})"
+                       if (attempt or rattempt) else "")
         logging_utils.section(log, f"START  {tag}  ({script_path.name})")
         res = _run_script_once(script_path, log, env, timeout)
         logging_utils.section(
             log, f"END    {tag}  [{res['status']}]  rc={res['returncode']}  "
                  f"in {fmt_duration(res['duration_s'])}")
-        if res["status"] == "SUCCESS" or attempt >= retries or not res["is_quota"]:
+        if res["status"] == "SUCCESS":
             break
-        attempt += 1
-        wait = retry_wait + random.randint(0, 15)   # jitter de-syncs parallel retries
-        log.warning("[%s] Google API quota / 429 hit — waiting %ds, then retry "
-                    "%d/%d.", label, wait, attempt, retries)
-        time.sleep(wait)
+        if res["delivered"]:
+            # Something already reached Drive / the recipients: never re-run.
+            log.error("[%s] FAILED after delivering part of its output (rc=%s) — NOT "
+                      "re-run automatically, a second run would duplicate the reports "
+                      "and e-mails already sent. See the log above for the failed "
+                      "report(s) and the root error.", label, res["returncode"])
+            break
+        if res["returncode"] == RC_RETRYABLE and rattempt < report_retries:
+            rattempt += 1
+            wait = report_wait + random.randint(0, 30)
+            log.warning("[%s] failed before delivering anything (rc=%d) — waiting %ds, "
+                        "then re-run %d/%d.", label, RC_RETRYABLE, wait, rattempt, report_retries)
+            time.sleep(wait)
+            continue
+        if res["is_quota"] and attempt < retries:
+            attempt += 1
+            wait = retry_wait + random.randint(0, 15)   # jitter de-syncs parallel retries
+            log.warning("[%s] Google API quota / 429 hit — waiting %ds, then retry "
+                        "%d/%d.", label, wait, attempt, retries)
+            time.sleep(wait)
+            continue
+        if res["returncode"] == RC_RETRYABLE or res["is_quota"]:
+            log.error("[%s] still failing after every automatic re-run — giving up. "
+                      "Root error: see the last traceback above.", label)
+        break
 
     return {
         "name": name,
@@ -188,7 +243,7 @@ def run_script(script_path, logger=None, extra_env=None, label=None,
         "counts": res["counts"],
         "log_file": str(log_file),
         "error": res["error"],
-        "attempts": attempt + 1,
+        "attempts": attempt + rattempt + 1,
         # business-readable summary for the completion e-mail (logs keep full detail)
         "summary": exec_summary.summarize(name, res.get("text", "")),
         "error_brief": (exec_summary.business_error(res.get("text", ""))

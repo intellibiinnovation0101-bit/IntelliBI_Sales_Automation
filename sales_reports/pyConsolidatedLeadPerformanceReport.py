@@ -64,8 +64,8 @@ DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
 MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
-MANUAL_START_DATE            = "2026-09-01"      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
-MANUAL_END_DATE              = "2026-09-25"      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
+MANUAL_START_DATE            = "2026-08-25"      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
+MANUAL_END_DATE              = "2026-09-26"      # "YYYY-MM-DD" - required when GENERATE_MANUAL_REPORT = True
 
 # ── Scheduled-run report selection (scheduler only) ──────────────────────────
 # When this script runs through the scheduled Sales pipeline, run_scheduled.py
@@ -125,6 +125,7 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
 import _bootstrap  # noqa: E402  (sys.path + env defaults + config.yaml)
 from paths import CREDENTIALS_DIR, CONFIG_DIR, LOGS_DIR  # noqa: E402
+import api_retry  # noqa: E402  transient-error retry for Google API / SMTP calls
 # --- end bootstrap ---
 
 # Reuse the EXACT conversion model + banding from the Follow-Up report — never a
@@ -2426,11 +2427,12 @@ def read_master_df(sheets):
     """Read the consolidated master sheet into a DataFrame."""
     if LOCAL_MASTER_CSV:
         return pd.read_csv(LOCAL_MASTER_CSV, dtype=str, keep_default_na=False)
-    meta = sheets.spreadsheets().get(spreadsheetId=MASTER_SHEET_ID).execute()
+    meta = api_retry.execute(sheets.spreadsheets().get(spreadsheetId=MASTER_SHEET_ID),
+                             "Sheets: master metadata")
     title = MASTER_TAB_NAME or meta["sheets"][0]["properties"]["title"]
-    resp = sheets.spreadsheets().values().get(
+    resp = api_retry.execute(sheets.spreadsheets().values().get(
         spreadsheetId=MASTER_SHEET_ID, range=title,
-        valueRenderOption="FORMATTED_VALUE").execute()
+        valueRenderOption="FORMATTED_VALUE"), "Sheets: read master rows")
     values = resp.get("values", [])
     if not values:
         return pd.DataFrame()
@@ -2449,11 +2451,14 @@ def load_enrolled_mobiles(sheets=None):
     try:
         if sheets is None:
             sheets = get_read_service()
-        meta = sheets.spreadsheets().get(spreadsheetId=ENROLLED_SHEET_ID).execute()
+        # Transient Google errors (503 "currently unavailable" …) are retried so a
+        # momentary hiccup no longer silently drops the enrolled-student exclusion.
+        meta = api_retry.execute(sheets.spreadsheets().get(spreadsheetId=ENROLLED_SHEET_ID),
+                                 "Sheets: Student Admission Responses metadata")
         title = ENROLLED_TAB_NAME or meta["sheets"][0]["properties"]["title"]
-        resp = sheets.spreadsheets().values().get(
+        resp = api_retry.execute(sheets.spreadsheets().values().get(
             spreadsheetId=ENROLLED_SHEET_ID, range=title,
-            valueRenderOption="FORMATTED_VALUE").execute()
+            valueRenderOption="FORMATTED_VALUE"), "Sheets: read Student Admission Responses")
         values = resp.get("values", [])
         if not values:
             return set()
@@ -2487,15 +2492,22 @@ def upload_report_to_drive(drive, folder_id, name, xlsx_path):
     from googleapiclient.http import MediaFileUpload
 
     safe = name.replace("'", "\\'")
+
+    def _find_same_name():
+        """Files already carrying this exact name in the folder (Sheet or xlsx)."""
+        res = api_retry.execute(drive.files().list(
+            q="name = '%s' and '%s' in parents and trashed = false" % (safe, folder_id),
+            fields="files(id,webViewLink)", pageSize=20,
+            supportsAllDrives=True, includeItemsFromAllDrives=True),
+            f"Drive: look up '{name}'")
+        return res.get("files", [])
+
     # Remove any previous file(s) with this name in the folder (Sheet or xlsx).
     try:
-        res = drive.files().list(
-            q="name = '%s' and '%s' in parents and trashed = false" % (safe, folder_id),
-            fields="files(id)", pageSize=20,
-            supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
-        old = res.get("files", [])
+        old = _find_same_name()
         for fobj in old:
-            drive.files().delete(fileId=fobj["id"], supportsAllDrives=True).execute()
+            api_retry.execute(drive.files().delete(fileId=fobj["id"], supportsAllDrives=True),
+                              f"Drive: delete previous '{name}'")
     except Exception as e:
         print("  [drive] could not remove previous file(s):", e)
         old = []
@@ -2506,10 +2518,27 @@ def upload_report_to_drive(drive, folder_id, name, xlsx_path):
         resumable=False)
     body = {"name": name, "parents": [folder_id],
             "mimeType": "application/vnd.google-apps.spreadsheet"}  # convert to Sheet
+
+    def _create():
+        return drive.files().create(body=body, media_body=media,
+                                    fields="id,webViewLink",
+                                    supportsAllDrives=True).execute()
+
+    def _already_uploaded(_attempt, _exc):
+        # A 500 / timeout can arrive AFTER Drive stored the file. Before retrying,
+        # look for a file with this exact name: if it is there, reuse it — a retry
+        # must never leave a duplicate report on Drive.
+        try:
+            hits = _find_same_name()
+        except Exception:
+            return None
+        return hits[0] if hits else None
+
     try:
-        f = drive.files().create(body=body, media_body=media,
-                                 fields="id,webViewLink",
-                                 supportsAllDrives=True).execute()
+        # Transient Drive errors (500 "Internal Error", 503, timeouts …) are
+        # retried with back-off; anything else fails exactly as before.
+        f = api_retry.call_with_retry(_create, f"Drive: upload '{name}'",
+                                      on_retry=_already_uploaded)
     except Exception as e:
         if "storageQuota" in str(e):
             sys.exit(
@@ -2548,22 +2577,23 @@ def ensure_drive_subfolder(drive, parent_id, name):
     lookup/create failure, falls back to parent_id so the report is still uploaded."""
     safe = name.replace("'", "\\'")
     try:
-        res = drive.files().list(
+        res = api_retry.execute(drive.files().list(
             q=("name = '%s' and '%s' in parents and "
                "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
                % (safe, parent_id)),
             fields="files(id)", pageSize=1,
-            supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+            supportsAllDrives=True, includeItemsFromAllDrives=True),
+            f"Drive: look up subfolder '{name}'")
         hits = res.get("files", [])
         if hits:
             return hits[0]["id"]
     except Exception as e:
         print("  [drive] could not look up subfolder %r:" % name, e)
     try:
-        f = drive.files().create(
+        f = api_retry.execute(drive.files().create(
             body={"name": name, "parents": [parent_id],
                   "mimeType": "application/vnd.google-apps.folder"},
-            fields="id", supportsAllDrives=True).execute()
+            fields="id", supportsAllDrives=True), f"Drive: create subfolder '{name}'")
         print("  [drive] created subfolder:", name)
         return f["id"]
     except Exception as e:
@@ -2580,11 +2610,11 @@ def share_file_with(drive, file_id, emails, role="writer"):
         if not em:
             continue
         try:
-            drive.permissions().create(
+            api_retry.execute(drive.permissions().create(
                 fileId=file_id,
                 body={"type": "user", "role": role, "emailAddress": em},
                 sendNotificationEmail=False,
-                supportsAllDrives=True).execute()
+                supportsAllDrives=True), f"Drive: share with {em}")
             print(f"  [drive] shared report with {em} ({role})")
         except Exception as e:
             print(f"  [drive] could NOT share report with {em}:", e)
@@ -3344,6 +3374,10 @@ def _valid_recipients(recipients):
 
 
 def send_email(subject, html_body, recipients=None):
+    """Send one report e-mail. Returns True when it was sent, False otherwise.
+    Temporary SMTP problems (connection drop, timeout, 4xx) are retried with
+    back-off; permanent ones (e.g. 535 bad credentials) are logged, never retried.
+    Never raises — a failed e-mail is reported by the caller in the run summary."""
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
@@ -3351,26 +3385,32 @@ def send_email(subject, html_body, recipients=None):
         recipients if recipients is not None else EMAIL_RECIPIENTS)
     if not recipients:
         print("  [email] no valid recipients — nothing sent")
-        return
+        return False
     sys.path.insert(0, PROJECT_ROOT)
     try:
         import email_config as ec
         sender, app_pass = ec.GMAIL_SENDER, ec.GMAIL_APP_PASS
     except Exception as e:
         print("  [email] skipped - could not load config_files/email_config.py:", e)
-        return
+        return False
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
     msg.attach(MIMEText(html_body, "html"))
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
+
+    def _send():
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as srv:
             srv.login(sender, app_pass)
             srv.sendmail(sender, recipients, msg.as_string())
+
+    try:
+        api_retry.call_with_retry(_send, "SMTP: send to " + ", ".join(recipients))
         print("  [email] sent to", ", ".join(recipients))
+        return True
     except Exception as e:
         print("  [email] FAILED:", e)
+        return False
 
 
 def build_email_body(report_type, period_range, url, link_name, active, gen_stamp,
@@ -3560,7 +3600,32 @@ def build_email_body(report_type, period_range, url, link_name, active, gen_stam
 # ============================================================
 # MAIN
 # ============================================================
+# Exit codes returned by run() — read by the pipeline runner (common_utils.run_script):
+#   0  every report delivered
+#   1  one or more reports could NOT be delivered after every retry (details are
+#      logged; the runner must NOT re-run the script, the delivered reports would
+#      be duplicated)
+#   3  failed BEFORE any report was uploaded or e-mailed (source read, auth …):
+#      nothing was delivered, so the runner may re-run the script after a wait
+EXIT_OK, EXIT_PARTIAL, EXIT_RETRYABLE = 0, 1, 3
+
+
 def run():
+    """Generate + deliver every report for this run. See EXIT_* above."""
+    try:
+        return _run_reports()
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        print("\n[FAILED] the run stopped before any report was delivered — the error "
+              "above is the root cause. Nothing was uploaded or e-mailed, so this run "
+              "is safe to retry.")
+        return EXIT_RETRYABLE
+
+
+def _run_reports():
     today = now_ist().date()
     sheets = drive = None
     # Read the master as the service account directly (no impersonation needed);
@@ -3678,6 +3743,11 @@ def run():
     # file and never overwrite a previously generated report.
     run_suffix = now_ist().strftime(" _%I.%M.%S %p")
 
+    # Reports that could not be delivered after every retry: (label, range, reason).
+    # A failed report never stops the others — they are still generated and sent.
+    failed_jobs = []
+    delivered_any = False
+
     for label, rng, st, en, folder, fname, subject, link_name in jobs:
         tabs, active = build_report(label, rng, df, st, en)
         print(f"\n{label} report | {rng} | active leads: {len(active)} | tabs: {len(tabs)}")
@@ -3720,65 +3790,117 @@ def run():
             continue
         if not (xlsx_ok and os.path.exists(xlsx_path)):
             print("  [drive] no xlsx to upload — skipping this report.")
+            failed_jobs.append((label, rng, "local xlsx could not be written"))
             continue
-        # Per-period Drive subfolder (e.g. "Daily 20-Sep-2026",
-        # "Weekly 14-Sep-2026 to 20-Sep-2026", "Monthly Sep-2026") so every run for
-        # that day/week/month is grouped and preserved together. Reused if present.
-        upload_folder = ensure_drive_subfolder(drive, folder,
-                                                _period_folder_name(label, st, en))
-        # Upload the styled .xlsx to Drive as a Google Sheet (drive scope only).
-        url, created, _fid = upload_report_to_drive(drive, upload_folder, fname_ts, xlsx_path)
-        print(f"  {'created' if created else 'replaced'}: {url}")
 
-        # Active counsellors get Viewer (read-only) access to the FULL report file
-        # directly, so the link works for them regardless of the folder's sharing.
-        if COUNSELLOR_VIEWER_RECIPS:
-            share_file_with(drive, _fid, COUNSELLOR_VIEWER_RECIPS, role="reader")
+        # ── Deliver THIS report: Drive folder → upload → share → masked copy →
+        #    e-mails. Each step runs exactly once and its result is remembered
+        #    (state), so if a step hits a transient Google/SMTP error the remaining
+        #    steps are retried after a wait WITHOUT repeating the completed ones —
+        #    no duplicate Drive file, no duplicate e-mail. If the delivery still
+        #    fails, it is logged with its root cause and the NEXT report proceeds
+        #    (previously one such error aborted the whole run). The report content,
+        #    files, links, recipients and e-mail bodies are exactly as before.
+        state = {"emailed": set(), "email_failed": []}
+        gen_stamp = now_ist().strftime("%d-%b-%Y %I:%M %p") + " IST"
+        has_masked = bool(masked_recips and masked_xlsx_path and os.path.exists(masked_xlsx_path))
 
+        def _st_folder():
+            # Per-period Drive subfolder (e.g. "Daily 20-Sep-2026",
+            # "Weekly 14-Sep-2026 to 20-Sep-2026", "Monthly Sep-2026") so every run
+            # for that day/week/month is grouped and preserved together.
+            return ensure_drive_subfolder(drive, folder, _period_folder_name(label, st, en))
 
-        # Upload the masked copy (separate file) for the masking recipients, and
-        # share THAT file with them directly as Viewer (read-only) so the link works
-        # for them regardless of the folder's sharing (other recipients unaffected).
-        url_masked = None
-        if masked_recips and masked_xlsx_path and os.path.exists(masked_xlsx_path):
-            url_masked, _mc, masked_fid = upload_report_to_drive(
-                drive, upload_folder, fname_ts + " (Masked)", masked_xlsx_path)
-            print(f"  masked copy: {url_masked}")
+        def _st_upload():
+            # Upload the styled .xlsx to Drive as a Google Sheet (drive scope only).
+            url, created, fid = upload_report_to_drive(drive, state["folder"], fname_ts, xlsx_path)
+            print(f"  {'created' if created else 'replaced'}: {url}")
+            return url, fid
+
+        def _st_share():
+            # Active counsellors get Viewer (read-only) access to the FULL report
+            # file directly, so the link works regardless of the folder's sharing.
+            if COUNSELLOR_VIEWER_RECIPS:
+                share_file_with(drive, state["upload"][1], COUNSELLOR_VIEWER_RECIPS, role="reader")
+            return True
+
+        def _st_masked():
+            # Upload the masked copy (separate file) for the masking recipients and
+            # share THAT file with them as Viewer (other recipients unaffected).
+            if not has_masked:
+                return None
+            url_m, _mc, masked_fid = upload_report_to_drive(
+                drive, state["folder"], fname_ts + " (Masked)", masked_xlsx_path)
+            print(f"  masked copy: {url_m}")
             share_file_with(drive, masked_fid, masked_recips, role="reader")
+            return url_m
 
-        # One professional email per report, with its own subject + named link.
-        # Normal recipients get the full report; masking recipients get the
-        # masked copy — same subject/body, only the linked report differs.
-        if SEND_EMAIL:
-            gen_stamp = now_ist().strftime("%d-%b-%Y %I:%M %p") + " IST"
-            # Sent one-per-recipient so each greeting can carry that person's name
-            # (from counsellors.json). The report each recipient receives is
-            # unchanged: normal recipients get the full report, masked recipients
-            # get the masked copy — only the greeting differs per person.
-            if normal_recips:
-                for _rcpt in normal_recips:
-                    send_email(subject,
-                               build_email_body(label, rng, url, link_name, active,
-                                                gen_stamp, start=st, end=en,
-                                                greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
-                               [_rcpt])
+        def _st_emails():
+            # One professional email per report, with its own subject + named link.
+            # Normal recipients get the full report; masking recipients get the
+            # masked copy — same subject/body, only the linked report differs.
+            # Sent one-per-recipient so each greeting can carry that person's name;
+            # a recipient already e-mailed (state["emailed"]) is never sent twice.
+            if not SEND_EMAIL:
+                return True
+            url = state["upload"][0]
+            url_masked = state.get("masked")
+            for _rcpt in normal_recips:
+                if _rcpt in state["emailed"]:
+                    continue
+                ok = send_email(subject,
+                                build_email_body(label, rng, url, link_name, active,
+                                                 gen_stamp, start=st, end=en,
+                                                 greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                                [_rcpt])
+                (state["emailed"].add if ok else state["email_failed"].append)(_rcpt)
             if masked_recips:
                 if url_masked:
                     for _rcpt in masked_recips:
-                        send_email(subject,
-                                   build_email_body(label, rng, url_masked, link_name,
-                                                    active_m if active_m is not None else active,
-                                                    gen_stamp, start=st, end=en,
-                                                    greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
-                                   [_rcpt])
+                        if _rcpt in state["emailed"]:
+                            continue
+                        ok = send_email(subject,
+                                        build_email_body(label, rng, url_masked, link_name,
+                                                         active_m if active_m is not None else active,
+                                                         gen_stamp, start=st, end=en,
+                                                         greeting_name=EMAIL_NAMES.get(_rcpt.lower())),
+                                        [_rcpt])
+                        (state["emailed"].add if ok else state["email_failed"].append)(_rcpt)
                 else:
                     # Never send the FULL report to a masking recipient. If the
                     # masked copy couldn't be produced/uploaded, skip them.
                     print("  [email] masked copy unavailable — NOT emailing masked "
                           "recipients (to avoid sending unmasked data):",
                           ", ".join(masked_recips))
+            return True
+
+        steps = [("folder", _st_folder), ("upload", _st_upload), ("share", _st_share),
+                 ("masked", _st_masked), ("emails", _st_emails)]
+        try:
+            api_retry.run_steps_with_retry(f"{label} report ({rng})", steps, state)
+            delivered_any = True
+            if state["email_failed"]:
+                failed_jobs.append((label, rng, "e-mail could not be sent to: "
+                                    + ", ".join(state["email_failed"])))
+        except api_retry.DeliveryFailed as e:
+            delivered_any = delivered_any or ("upload" in state) or bool(state["emailed"])
+            print(f"  [FAILED] {label} report ({rng}) — {e}")
+            failed_jobs.append((label, rng, str(e)))
+            continue
+
+    if failed_jobs:
+        print("\n[FAILED] %d of %d report(s) could not be fully delivered:" % (len(failed_jobs), len(jobs)))
+        for label, rng, why in failed_jobs:
+            print(f"   - {label} ({rng}): {why}")
+        if delivered_any:
+            print("  Other reports of this run WERE delivered — do not re-run this run "
+                  "blindly (it would duplicate them); re-run only the failed report if needed.")
+            return EXIT_PARTIAL
+        print("  Nothing was delivered in this run — safe to retry.")
+        return EXIT_RETRYABLE
     print("\nDone.")
+    return EXIT_OK
 
 
 if __name__ == "__main__":
-    run()
+    sys.exit(run())

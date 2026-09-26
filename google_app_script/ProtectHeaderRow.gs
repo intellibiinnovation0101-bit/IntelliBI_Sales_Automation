@@ -1,5 +1,5 @@
 /**
- * LockHeaderRow.gs — protect the HEADER ROW (row 1) on chosen tabs so the
+ * ProtectHeaderRow.gs — protect the HEADER ROW (row 1) on chosen tabs so the
  * column names can't be renamed/edited. The reports look up columns BY NAME
  * (Timestamp, Full Name, Mobile Number, …), so a changed header silently breaks
  * consolidation and the walk-in reports. Locking row 1 prevents that.

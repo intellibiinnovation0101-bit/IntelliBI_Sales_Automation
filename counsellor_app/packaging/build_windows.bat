@@ -45,7 +45,7 @@ pyinstaller --noconfirm --clean --onefile ^
   --collect-all google.oauth2 ^
   --collect-all tzdata ^
   --collect-submodules app ^
-  --hidden-import app.web.ui ^
+  --hidden-import app.web.counsellor_page ^
   --distpath packaging\dist ^
   --workpath packaging\build ^
   --specpath packaging ^

@@ -15,7 +15,7 @@ from config import SETTINGS, SERVICE_ACCOUNT_FILE, READ_WRITE_SCOPES
 
 _sheets = None
 
-# Column order of the "Contact Us Form" sheet (A:N), matching website_email.gs.
+# Column order of the "Contact Us Form" sheet (A:N), matching WebsiteFormWebhook.gs (Apps Script web app).
 SOURCE_COLS = [
     "enquiry_date", "name", "mobile", "email", "current_role", "preferred_time",
     "course", "career_goal", "total_experience", "consultation_mode",
