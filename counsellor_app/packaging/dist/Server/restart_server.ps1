@@ -29,7 +29,8 @@ Get-Process -Name 'IntelliBICounsellorServer' -ErrorAction SilentlyContinue |
     Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 
-try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop; Write-Host 'Start-up task started.' }
+Enable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null   # undo Stop Server.bat
+try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop; Write-Host 'Start-up task started (automatic start-up is ON).' }
 catch { Write-Warning "Could not start the task '$TaskName' - run 'Install Auto-Start.bat' first."; exit 1 }
 
 $up = $false
