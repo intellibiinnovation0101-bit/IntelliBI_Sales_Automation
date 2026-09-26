@@ -23,3 +23,7 @@ git checkout dev
 ----------------------------------------------------->
 cd "C:\Users\vaibh\Documents\IntelliBI Automation\IntelliBI_Sales_Automation"
 powershell -ExecutionPolicy Bypass -File .\push_all.ps1 -Message "Sales: what you changed"
+
+
+cd "C:\Users\vaibh\Documents\IntelliBI Automation\IntelliBI_Operations_Automation"
+powershell -ExecutionPolicy Bypass -File .\push_all.ps1 -Message "Operations: attendance refresh fix (Step 5c) + reconcile test"

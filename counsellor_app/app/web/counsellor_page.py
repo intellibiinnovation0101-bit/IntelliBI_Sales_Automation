@@ -127,12 +127,67 @@ function shell(){
   $("#out").onclick=async()=>{await api("/api/logout",{method:"POST"});renderLogin();};
   const q=$("#q");
   $("#find").onclick=()=>doFind(q.value.trim());
-  q.addEventListener("keydown",e=>{if(e.key==="Enter")doFind(q.value.trim());});
+  q.addEventListener("keydown",e=>{
+    if(e.key==="Enter")doFind(q.value.trim());
+    else if(e.key==="Escape")clearHits();
+  });
+  // Live search: matching leads appear as the counsellor types (no Enter/Find
+  // needed). Enter / Find keep their exact behaviour (exact mobile opens directly).
+  q.addEventListener("input",()=>liveSearch(q.value.trim()));
   q.focus();
+}
+
+/* ---------- search ---------- */
+const LIVE_MIN_CHARS=2, LIVE_DEBOUNCE_MS=150;
+let liveTimer=null, liveSeq=0;
+
+function clearHits(){
+  liveSeq++;                                   // any in-flight live lookup is now stale
+  if(liveTimer){clearTimeout(liveTimer);liveTimer=null;}
+  $("#hits").innerHTML="";
+}
+
+/* Open a lead from the results list and drop the list at once, so the old
+   suggestions never stay on screen next to the opened record. */
+async function openFromHits(mobile){
+  clearHits();
+  const j=await api("/api/lead?mobile="+encodeURIComponent(mobile));
+  showLead(j);
+}
+
+/* Render the matching leads under the search box (shared by live search and Find). */
+function renderHits(results,term){
+  if(results.length===0){$("#hits").innerHTML=
+     `No existing lead found. <a href="#" id="newl">Create a new lead for “${escapeHtml(term)}”.</a>`;
+     const nl=$("#newl"); if(nl) nl.onclick=(e)=>{e.preventDefault();clearHits();
+       showLead({found:false,record:null,history:[]},term);};
+     return;}
+  $("#hits").innerHTML=results.map(r=>
+     `<div class="row" style="justify-content:space-between;border-bottom:1px solid var(--line);padding:6px 0">
+        <span><b>${escapeHtml(r["Mobile Number"])}</b> — ${escapeHtml(r["Full Name"]||"")}
+        <span class="muted">${escapeHtml(r["Admission Status"]||"")}</span></span>
+        <button class="sec" data-m="${escapeHtml(r["Mobile Number"])}">Open</button></div>`).join("");
+  $("#hits").querySelectorAll("button[data-m]").forEach(b=>b.onclick=()=>openFromHits(b.dataset.m));
+}
+
+/* As-you-type suggestions: debounced, and a reply that arrives for an older
+   term is ignored, so the list always matches what is in the box right now. */
+function liveSearch(term){
+  if(liveTimer){clearTimeout(liveTimer);liveTimer=null;}
+  const seq=++liveSeq;
+  if(term.length<LIVE_MIN_CHARS){$("#hits").innerHTML="";return;}
+  liveTimer=setTimeout(async()=>{
+    try{
+      const s=await api("/api/search?q="+encodeURIComponent(term));
+      if(seq!==liveSeq||$("#q").value.trim()!==term)return;      // stale reply
+      renderHits(s.results,term);
+    }catch(e){ if(seq===liveSeq)$("#hits").innerHTML=""; }
+  },LIVE_DEBOUNCE_MS);
 }
 
 async function doFind(term){
   if(!term){return;}
+  clearHits();
   $("#hits").textContent="Searching…";
   // exact mobile first
   const digits=term.replace(/\D/g,"");
@@ -142,18 +197,8 @@ async function doFind(term){
     if(j.found){return showLead(j);}
   }
   const s=await api("/api/search?q="+encodeURIComponent(term));
-  if(s.results.length===0){$("#hits").innerHTML=
-     `No existing lead found. <a href="#" id="newl">Create a new lead for “${escapeHtml(term)}”.</a>`;
-     const nl=$("#newl"); if(nl) nl.onclick=(e)=>{e.preventDefault();
-       showLead({found:false,record:null,history:[]},term);};
-     $("#panel").innerHTML=""; return;}
-  $("#hits").innerHTML=s.results.map(r=>
-     `<div class="row" style="justify-content:space-between;border-bottom:1px solid var(--line);padding:6px 0">
-        <span><b>${escapeHtml(r["Mobile Number"])}</b> — ${escapeHtml(r["Full Name"]||"")}
-        <span class="muted">${escapeHtml(r["Admission Status"]||"")}</span></span>
-        <button class="sec" data-m="${escapeHtml(r["Mobile Number"])}">Open</button></div>`).join("");
-  $("#hits").querySelectorAll("button[data-m]").forEach(b=>b.onclick=async()=>{
-     const j=await api("/api/lead?mobile="+encodeURIComponent(b.dataset.m));showLead(j);});
+  if(s.results.length===0){$("#panel").innerHTML="";}
+  renderHits(s.results,term);
 }
 
 /* ---------- lead editor ---------- */

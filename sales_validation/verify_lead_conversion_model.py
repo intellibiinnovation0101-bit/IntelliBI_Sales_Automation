@@ -1,7 +1,7 @@
 import sys, os, random, tempfile
 from datetime import datetime, timedelta
 sys.path.insert(0, ".")
-import conversion_ml as ml
+import lead_conversion_model as ml
 
 fails=[]
 def check(n,c): print(("  PASS" if c else "  FAIL"), n); (fails.append(n) if not c else None)

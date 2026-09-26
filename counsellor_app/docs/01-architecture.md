@@ -74,7 +74,7 @@ counsellor_app/
 │   ├── server.py              ← FastAPI app: API endpoints + serves the UI
 │   ├── manage_users.py        ← admin CLI: add counsellors, hash passwords, gen secret
 │   └── web/
-│       └── ui.py              ← the entire single-page counsellor UI (one HTML string)
+│       └── counsellor_page.py ← the entire single-page counsellor UI (one HTML string)
 │
 ├── credentials/               ← put service_account.json here (git-ignored)
 ├── data/                      ← SQLite store.db lives here at runtime (git-ignored)
@@ -94,7 +94,7 @@ counsellor_app/
 | `sync.py` | Background thread. Drains the journal to Google Sheets in small batches with retry/backoff, and periodically **reconciles** (re-reads the sheet to catch any out-of-band edits) without losing in-flight writes. |
 | `auth.py` | Password hashing/verification (bcrypt), signed expiring session cookies, optional Google Workspace OAuth hook. |
 | `server.py` | FastAPI routes (`/api/login`, `/api/lead`, `/api/search`, `/api/save`, `/health`) and serves the UI at `/`. |
-| `web/ui.py` | The whole counsellor UI: login → search → view current + history → edit → save. Vanilla JS, no build step, same-origin API only. |
+| `web/counsellor_page.py` | The whole counsellor UI: login → search → view current + history → edit → save. Vanilla JS, no build step, same-origin API only. |
 
 ## 1.5 Data flow of a single save
 

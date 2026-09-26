@@ -54,6 +54,23 @@ email:
 pipeline:
   stop_on_failure: true              # abort downstream layers if a critical layer fails
   script_timeout_seconds: 5400       # per-script hard cap (90 min); "" = no cap
+  # ── Automatic retry on production failures (report layer) ──────────────────
+  # Every Google Sheets / Drive / SMTP call made by the report scripts is retried
+  # on TRANSIENT errors only (HTTP 429/500/502/503/504, timeouts, connection
+  # resets, SMTP 4xx) with exponential back-off; permanent errors (403/404, bad
+  # credentials, storage quota) still fail immediately.
+  api_retry_attempts: 5              # calls per operation (1 = no retry)
+  api_retry_base_wait_sec: 10        # first wait; doubles each retry, capped at 120s
+  # A report's delivery (Drive folder -> upload -> share -> masked copy -> e-mails)
+  # remembers each completed step; a transient failure re-runs ONLY the pending
+  # steps after this wait, so a retry never duplicates a Drive file or an e-mail.
+  delivery_retry_attempts: 3         # passes per report (1 = no retry)
+  delivery_retry_wait_sec: 90        # wait before the 2nd pass; doubles each pass
+  # If a report script fails BEFORE delivering anything (source sheet unreadable,
+  # auth, Google outage -> exit code 3) the runner re-runs the whole script after
+  # this wait. A script that already uploaded/e-mailed something is NEVER re-run.
+  report_retries: 2                  # whole-script re-runs (0 = off)
+  report_retry_wait_seconds: 300     # wait between re-runs (+ up to 30s jitter)
 
 lead_alert:                          # Website Lead popup / acknowledgement service
   enabled: true

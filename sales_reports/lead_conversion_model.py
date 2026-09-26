@@ -1,5 +1,5 @@
 """
-conversion_ml.py — self-learning enhancement for the Follow-Up report's
+lead_conversion_model.py — self-learning enhancement for the Follow-Up report's
 `Conversion Chance %`.
 
 DECOUPLED from the report (no imports back into it): the report hands it a

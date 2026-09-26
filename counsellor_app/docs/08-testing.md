@@ -19,6 +19,7 @@ Expected: **all tests pass** (23 at time of writing). What they cover:
 | `tests/test_store.py` | Instant in-memory reads, search by mobile/name, versioned saves that archive the prior version to history, validation blocking bad data, new-lead insert, **durability across a simulated restart** (an un-synced write survives), and **reconcile preserving un-synced writes**. |
 | `tests/test_sync.py` | The write-behind worker actually pushes updates to the (fake) sheet, the row written has **exactly the production columns in order**, the prior version is archived to InActive, and a **transient Sheets failure is retried without data loss**. |
 | `tests/test_api.py` | Full HTTP flow via FastAPI's TestClient: auth required, bad login rejected, `/health` open, login → read lead → save → history, date canonicalisation end-to-end, `Counselling By` defaulted from the logged-in user, and validation errors returning HTTP 400. |
+| `tests/test_counsellor_page_search.py` | Browser test (Playwright/Chromium against the real app on a fake sheet): matching leads appear while typing in the search box without Enter/Find, the list narrows as the term changes, it is cleared the moment a lead is opened, Enter with a full mobile still opens the record directly, and Save works from a lead opened via a suggestion. Skipped automatically when Playwright is not installed. |
 
 ## 8.2 Performance validation
 
