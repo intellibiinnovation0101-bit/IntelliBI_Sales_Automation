@@ -55,6 +55,7 @@ IntelliBI_Sales_Automation/
 ├── output/exports/          consolidated CSV/XLSX exports
 ├── intellibi_lead_cycle/    optional historical training data (git-ignored)
 ├── scripts/                 run_layer1/2/3.py, run_all.py
+├── google_app_script/       Apps Script files deployed in the Google Sheets (form, webhooks, sheet locks — see its README)
 ├── docs/                    this documentation
 ├── requirements.txt  .gitignore  README.md  run_all.bat
 ```

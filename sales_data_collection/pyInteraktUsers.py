@@ -48,6 +48,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import utils   # project-shared Google auth + upsert (same one Exotel uses)
+import api_retry   # transient-error retry for the Sheets read (common/api_retry.py)
 import interakt_common as ic
 import interakt_enrich as ie
 try:
@@ -224,12 +225,19 @@ def load_credentials() -> str:
 #  CUSTOM-FIELD CHANGE LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
 def _read_tab_by_key(service, spreadsheet_id, tab, key_col) -> dict:
-    """Read the sheet tab into {key_value: {column: value}} (empty if blank/missing)."""
-    try:
-        resp = service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id, range=f"{tab}!A1:ZZ").execute()
-    except Exception:
-        return {}
+    """Read the sheet tab into {key_value: {column: value}} (empty if blank/missing).
+
+    The result is what protects the web-session columns (Conversation Label,
+    Assigned Agent, enr_*, interaction history) on every run: a contact the
+    current run has no fresh value for keeps the value already in the sheet.
+    So a FAILED read must never be mistaken for an empty sheet - it used to
+    return {} on any exception, after which the same run blanked those columns
+    and dropped every enr_* column from the layout. Transient Sheets errors are
+    retried; a persistent one aborts the run (nothing is written)."""
+    resp = api_retry.call_with_retry(
+        lambda: service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"{tab}!A1:ZZ").execute(),
+        f"Sheets: read {tab}", log=log.warning)
     values = resp.get("values", [])
     if not values:
         return {}
@@ -396,10 +404,24 @@ def build_repeat_refresh_rows(conv_map, existing, windowed_rows):
     return extra
 
 
-def preserve_web_columns(existing: dict, rows, key_col) -> None:
+def preserve_web_columns(existing: dict, rows, key_col, only_missing: bool = False) -> None:
     """Backfill web-session columns from the existing sheet when the current run
-    left them blank, so a base-only (no-enrichment) sync never wipes a value
-    (e.g. a Conversation Label) captured on a previous enriched run."""
+    produced no value for them, so a sync never wipes a value (e.g. a
+    Conversation Label) captured on a previous enriched run.
+
+    only_missing=False  (base-only run, no web session): a column that is absent
+                        OR blank on the row is taken from the sheet - unchanged
+                        behaviour.
+    only_missing=True   (enriched run): only a column ABSENT from the row is taken
+                        from the sheet. Absent means the source had nothing for
+                        this contact - the contact is not in the Inbox chats
+                        list, a per-customer endpoint failed, or a label/agent
+                        id could not be resolved. A column that is PRESENT but
+                        blank is authoritative (the chat really is unlabelled /
+                        unassigned) and is written as blank, exactly as before.
+    Previously this ran only on base-only runs, so every enriched run blanked
+    the conversation columns of each contact missing from that run's chats map
+    (visible in the log as 'Conversation Label': 'assign to Arsh' -> '')."""
     if not existing:
         return
     for row in rows:
@@ -407,6 +429,8 @@ def preserve_web_columns(existing: dict, rows, key_col) -> None:
         if not old:
             continue
         for col in WEB_PRESERVE_COLUMNS:
+            if col in row and only_missing:
+                continue
             if not str(row.get(col, "") or "").strip() and str(old.get(col, "") or "").strip():
                 row[col] = old[col]
 
@@ -513,6 +537,11 @@ def main() -> int:
                                 log.info("  enriched %s/%s", _enriched, len(rows))
                     enrichment_ran = True
                     conv_map = dict(getattr(enr, "_conv", {}) or {})
+                    _with_chat = sum(1 for r in rows if str(r.get("id", "")) in conv_map)
+                    log.info("Enrichment: %s/%s leads have a chat in the Inbox list "
+                             "(label/agent/status refreshed); %s have none - their "
+                             "previous values are kept.",
+                             _with_chat, len(rows), len(rows) - _with_chat)
                     _mark_enrichment_ok()          # record that the session worked
                     log.info("Enrichment complete.")
                     break
@@ -576,11 +605,29 @@ def main() -> int:
         columns = (base_cols + custom_cols + conv_cols
                    + INTERACTION_COLUMNS + ACTIVITY_COLUMNS + enrich_cols)
 
+        # --- heal raw ids left in the sheet by an earlier run whose /members/
+        #     lookup had failed (enr_contact_owner showed the owner's UUID). When
+        #     this run could load the members list, translate them to names. ---
+        if enrichment_ran and existing:
+            healed = 0
+            for row in rows:
+                if "enr_contact_owner" in row:
+                    continue                          # fresh value this run
+                old = existing.get(str(row.get(key_col, "")).strip()) or {}
+                name = enr.user_name_strict(old.get("enr_contact_owner"))
+                if name and name != old.get("enr_contact_owner"):
+                    row["enr_contact_owner"] = name
+                    healed += 1
+            if healed:
+                log.info("enr_contact_owner: %s raw id(s) resolved to agent names.", healed)
+
         # --- write via the shared project upsert --------------------------
-        if not enrichment_ran:
-            # Don't blank previously-captured web/interaction columns on a
-            # base-only run (no web session).
-            preserve_web_columns(existing, rows, key_col)
+        # Never blank a previously-captured web/interaction column the current
+        # run has no value for: on a base-only run (no web session) everything is
+        # backfilled from the sheet as before; on an enriched run only the
+        # columns the source returned nothing for (contact not in the chats
+        # list, endpoint failure, unresolvable id) are kept from the sheet.
+        preserve_web_columns(existing, rows, key_col, only_missing=enrichment_ran)
         log_field_changes(existing, rows, key_col)
         utils.upsert_rows(service, spreadsheet_id, TAB_NAME,
                           columns, rows, match_keys=[key_col])

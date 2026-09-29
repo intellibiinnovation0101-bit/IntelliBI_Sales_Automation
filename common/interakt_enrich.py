@@ -57,6 +57,20 @@ class WebAuthError(RuntimeError):
     """Raised when the internal web session is missing or rejected (401/403)."""
 
 
+def _scalar_id(v: Any) -> str:
+    """Return an id as a plain string whatever shape the API used for it:
+    "uuid", {"id": "uuid", ...}, ["uuid"], [{"id": "uuid"}] -> "uuid"; None/""/[]
+    -> "". Interakt has changed nested shapes before (customer_id is sometimes an
+    object), so every id read from the web APIs goes through here."""
+    if v is None:
+        return ""
+    if isinstance(v, dict):
+        return _scalar_id(v.get("id") or v.get("uuid") or v.get("value"))
+    if isinstance(v, (list, tuple)):
+        return _scalar_id(v[0]) if v else ""
+    return str(v).strip()
+
+
 # ---------------------------------------------------------------------------
 # cURL parsing (headers incl. cookie) — same approach as the probe
 # ---------------------------------------------------------------------------
@@ -176,6 +190,10 @@ class InteraktEnricher:
                         walk(it)
             walk(members)
             log.info("Enrichment lookups: %s users/agents.", len(self._user_names))
+            if not self._user_names:
+                log.warning("Enrichment lookups: the /members/ list came back EMPTY - "
+                            "Assigned Agent / enr_contact_owner cannot be resolved this "
+                            "run; the sheet keeps its previous values for them.")
         except WebAuthError:
             raise
         except Exception as exc:
@@ -209,6 +227,34 @@ class InteraktEnricher:
 
     def label_name(self, lid: Optional[str]) -> str:
         return self._label_names.get(lid or "", "")
+
+    # -- strict resolvers: a readable name, or None when it cannot be resolved -
+    # Used for the columns the sheet shows to people (Assigned Agent,
+    # enr_contact_owner, Conversation Label). They never fall back to the raw
+    # UUID (which is what previously landed in enr_contact_owner when the
+    # /members/ lookup timed out), and they return None - "unknown this run" -
+    # when the lookup list failed to load, so the caller keeps the value already
+    # in the sheet instead of overwriting it with a blank or an id.
+    def user_name_strict(self, uid: Any) -> Optional[str]:
+        uid = _scalar_id(uid)
+        if not uid:
+            return None
+        name = self._user_names.get(uid)
+        return name if name else None
+
+    def stage_name_strict(self, sid: Any) -> Optional[str]:
+        sid = _scalar_id(sid)
+        if not sid:
+            return None
+        name = self._stage_names.get(sid)
+        return name if name else None
+
+    def label_name_strict(self, lid: Any) -> Optional[str]:
+        lid = _scalar_id(lid)
+        if not lid:
+            return None
+        name = self._label_names.get(lid)
+        return name if name else None
 
     # -- conversation summary (label / assignee / status) per customer -----
     # Inbox chat views to page through. The previous code fetched only "active"
@@ -256,8 +302,7 @@ class InteraktEnricher:
                 if not items:
                     break
                 for it in items:
-                    cust = it.get("customer_id")
-                    cid = cust.get("id") if isinstance(cust, dict) else cust
+                    cid = _scalar_id(it.get("customer_id") or it.get("customer"))
                     if not cid:
                         continue
                     la = str(it.get("last_activity_at_utc") or "")
@@ -265,9 +310,7 @@ class InteraktEnricher:
                     # (UTC ISO timestamps compare correctly as plain strings).
                     if cid in self._conv and la <= best_at.get(cid, ""):
                         continue
-                    self._conv[cid] = {
-                        "Conversation Label": self.label_name(it.get("conversation_label_id")),
-                        "Assigned Agent": self.user_name(it.get("assigned_to_user_id")),
+                    summ: Dict[str, Any] = {
                         "Chat Status": it.get("chat_status")
                             or ("Closed" if it.get("is_closed") else ""),
                         "Chat Last Customer Message At":
@@ -278,6 +321,32 @@ class InteraktEnricher:
                         "Chat Last Activity At":
                             it.get("last_activity_at_utc") or "",
                     }
+                    # Label / agent: three cases, so a lookup failure can never
+                    # wipe the sheet -
+                    #   no id on the chat          -> "" (authoritative: unlabelled /
+                    #                                  unassigned)
+                    #   id resolves to a name      -> the name
+                    #   id but no name (lookup list failed to load, or an id the
+                    #   list does not know)        -> key OMITTED = unknown this run;
+                    #                                  the sheet keeps its value
+                    lid = _scalar_id(it.get("conversation_label_id")
+                                     or it.get("conversation_label"))
+                    if not lid:
+                        summ["Conversation Label"] = ""
+                    else:
+                        name = self.label_name_strict(lid)
+                        if name is not None:
+                            summ["Conversation Label"] = name
+                    aid = _scalar_id(it.get("assigned_to_user_id")
+                                     or it.get("assigned_to_user")
+                                     or it.get("assigned_to"))
+                    if not aid:
+                        summ["Assigned Agent"] = ""
+                    else:
+                        name = self.user_name_strict(aid)
+                        if name is not None:
+                            summ["Assigned Agent"] = name
+                    self._conv[cid] = summ
                     best_at[cid] = la
                 count = data.get("count") or 0
                 offset += limit
@@ -309,6 +378,17 @@ class InteraktEnricher:
             dj = self._get(f"{self.B1}/customers/{cid}/")
             traits = ((dj.get("data") or {}).get("traits")) or {}
             out.update(ic.custom_fields_from_traits(traits))
+            # Contact owner / lead stage live in the same traits. The public Get
+            # Users API carries _internal_contact_owner_id / _internal_stage_id
+            # for only a few contacts, so resolve them from the detail record as
+            # well (resolve_traits() already handled the public-API copy; this
+            # fills the rest). Emitted only when they resolve to a name.
+            owner = self.user_name_strict(traits.get("_internal_contact_owner_id"))
+            if owner:
+                out["enr_contact_owner"] = owner
+            stage = self.stage_name_strict(traits.get("_internal_stage_id"))
+            if stage:
+                out["enr_lead_stage"] = stage
         except WebAuthError:
             raise
         except Exception as exc:
@@ -364,12 +444,15 @@ class InteraktEnricher:
     def resolve_traits(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """Turn stage/owner trait ids on a base row into readable names."""
         out: Dict[str, Any] = {}
-        sid = row.get("trait__internal_stage_id")
-        if sid:
-            out["enr_lead_stage"] = self.stage_name(sid)
-        oid = row.get("trait__internal_contact_owner_id")
-        if oid:
-            out["enr_contact_owner"] = self.user_name(oid)
+        # Names only - an id that cannot be resolved (lookup list failed to load)
+        # is left out, so the sheet keeps the readable name it already has
+        # instead of receiving the raw UUID.
+        stage = self.stage_name_strict(row.get("trait__internal_stage_id"))
+        if stage:
+            out["enr_lead_stage"] = stage
+        owner = self.user_name_strict(row.get("trait__internal_contact_owner_id"))
+        if owner:
+            out["enr_contact_owner"] = owner
         return out
 
 

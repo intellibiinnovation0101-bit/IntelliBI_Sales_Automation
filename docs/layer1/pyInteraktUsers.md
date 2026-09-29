@@ -67,6 +67,30 @@ auto-login refreshes, and errors.
   can auto-refresh it.
 - **Sheet not found / permission**: the target Drive folder and sheet must be
   shared with the service account (`intellibi-data-pipeline@intellibi-mis.iam.gserviceaccount.com`).
+- **Assigned Agent / Conversation Label / enr_contact_owner blank** (fixed
+  29-Sep-2026). These come from the web session, not the public Get-Users API:
+  label + agent from the Inbox chats list (ids resolved through the
+  `/conversation-labels/` and `/members/` lookups), contact owner from the
+  `_internal_contact_owner_id` trait. Three defects used to empty them:
+  (1) on an *enriched* run the sheet values were **not** preserved, so every
+  contact missing from that run's chats map (no chat, or a view/endpoint that
+  returned nothing) was written blank; (2) a failed `/members/` lookup made
+  the resolver fall back to the raw UUID (that is the `dcc0e033-…` text seen in
+  `enr_contact_owner`) and an unknown label id became a blank; (3) the public
+  API carries `_internal_contact_owner_id` for only a handful of contacts, and
+  the customer detail record — which has it for all — was read only for the
+  custom fields. Now: `preserve_web_columns()` runs on every run (an enriched
+  run keeps a web column the source had nothing for, and still writes a real
+  blank when a chat is unlabelled/unassigned); ids that cannot be resolved are
+  left *unknown* (sheet value kept) instead of a UUID/blank; owner and stage
+  are also resolved from the detail traits; raw ids already in the sheet are
+  translated to names on the next run whose lookups load; and the sheet read
+  in `_read_tab_by_key()` retries and aborts on failure instead of treating a
+  failed read as an empty sheet (which used to blank those columns and drop the
+  `enr_*` columns). None of this fills a value the web session cannot see: the
+  session must be valid (`interakt_session.py --setup`) for these columns to
+  refresh at all — the log prints "ENRICHMENT SKIPPED" otherwise.
+  Verify offline: `python sales_validation\verify_interakt_enrichment.py`.
 
 ## Run standalone
 
