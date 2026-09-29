@@ -96,7 +96,7 @@ GENERATE_AUTO    = True
 GENERATE_DAILY   = True
 GENERATE_WEEKLY  = False
 GENERATE_MONTHLY = False
-GENERATE_MANUAL  = True         # Manual = a custom start/end date range
+GENERATE_MANUAL  = False         # Manual = a custom start/end date range
 
 # Optional manual periods (None -> use today / current week / current month).
 DAILY_DATE            = None #'2026-08-22'     # "YYYY-MM-DD"

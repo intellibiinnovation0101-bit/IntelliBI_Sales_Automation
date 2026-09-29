@@ -54,10 +54,10 @@ def now_ist():
 # ============================================================
 # REPORT GENERATION CONFIGURATION
 # ============================================================
-GENERATE_DAILY_REPORT   = False
+GENERATE_DAILY_REPORT   = True
 GENERATE_WEEKLY_REPORT   = False
 GENERATE_MONTHLY_REPORT  = False
-GENERATE_MANUAL_REPORT   = True    # Manual = a custom start/end date range (see MANUAL_START_DATE / MANUAL_END_DATE)
+GENERATE_MANUAL_REPORT   = False    # Manual = a custom start/end date range (see MANUAL_START_DATE / MANUAL_END_DATE)
 
 # Optional manual report periods (leave as None to use the defaults below).
 DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
