@@ -134,6 +134,7 @@ import api_retry  # noqa: E402  transient-error retry for Google API / SMTP call
 # model; lfa.BAND_RGB/BAND_HEX give the same priority colours; lfa._priority_mix_rows
 # gives the same Lead Priority Mix calculation.
 import pyLeadFollowUpAnalysisReport as lfa  # noqa: E402
+import lead_rules  # noqa: E402  (common/lead_rules.py — shared lead-quality rules)
 
 # Trained conversion bands for THIS run (Hot/Warm/Nurture/Low-Intent thresholds),
 # set once in run(); read by the Lead Priority Mix. None until run() populates it.
@@ -891,6 +892,49 @@ CB_HEADER = ["Counselling By", "Total Leads", "Fresh (New) Leads", "Fresh Connec
              "Repeat Leads", "Interactions", "Valid", "Relevant", "Irrelevant", "Referral",
              "GMeet Sch.", "Walk-in Sch.", "% Contribution"]
 
+# ── % Fresh Contribution (Summary tab: Lead Source Performance + Counsellor
+#    Performance only). Additive column placed immediately after "% Contribution":
+#        % Fresh Contribution = row's Fresh (New) Leads / Total Fresh (New) Leads × 100
+#    Columns are located by header NAME (never by position), and the value uses the
+#    same pct() string formatting as "% Contribution". The existing columns, rows
+#    and the per-counsellor tabs (which also use SRC_HEADER / source_perf) are
+#    left untouched — the column is added to copies of the Summary rows only.
+FRESH_CONTRIB_COL = "% Fresh Contribution"
+_FRESH_COL = "Fresh (New) Leads"
+_CONTRIB_COL = "% Contribution"
+
+
+def with_fresh_contribution_header(header):
+    """Copy of `header` with '% Fresh Contribution' inserted right after
+    '% Contribution'."""
+    h = list(header)
+    h.insert(h.index(_CONTRIB_COL) + 1, FRESH_CONTRIB_COL)
+    return h
+
+
+def with_fresh_contribution(rows, header, fresh_total):
+    """Copies of `rows` (laid out as `header`) with the row's
+    Fresh (New) Leads / fresh_total inserted right after '% Contribution'."""
+    fi = header.index(_FRESH_COL)
+    ci = header.index(_CONTRIB_COL)
+    out = []
+    for r in rows:
+        r = list(r)
+        r.insert(ci + 1, pct(r[fi], fresh_total))
+        out.append(r)
+    return out
+
+
+def source_fresh_total(rows, header=SRC_HEADER):
+    """Total Fresh (New) Leads for the Lead Source Performance share — the same
+    denominator basis as that table's '% Contribution': the four real acquisition
+    channels only (Walk-In + Website + WhatsApp + Call), so the channel shares sum
+    to ~100% even when one lead used several channels. Internal / extra labels
+    (e.g. IntelliBI) still get a share but are not part of the total."""
+    fi = header.index(_FRESH_COL)
+    known = {label for label, _col in SOURCES}
+    return sum(r[fi] for r in rows if r[0] in known)
+
 
 def add_report_header(tab, title_text, period_range, gen_stamp, multiline=False):
     """One merged header row combining title + reporting period + generated time
@@ -1136,15 +1180,19 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
     add_exec_summary(t, active)
 
     t.title("Lead Source Performance")
-    t.header(SRC_HEADER)
-    for r in source_perf(active):
+    t.header(with_fresh_contribution_header(SRC_HEADER))
+    _srows = source_perf(active)
+    for r in with_fresh_contribution(_srows, SRC_HEADER, source_fresh_total(_srows)):
         t.row(r)
     t.blank()
 
     t.title("Counsellor Performance")
-    t.header(CB_HEADER)
+    t.header(with_fresh_contribution_header(CB_HEADER))
     _, crows = counsellor_perf(active)
-    for r in crows:
+    # Total Fresh (New) Leads = every fresh active lead (each lead belongs to exactly
+    # one counsellor, so this equals the sum of the Fresh column).
+    _cb_fresh_total = sum(1 for a in active if a["_is_new"])
+    for r in with_fresh_contribution(crows, CB_HEADER, _cb_fresh_total):
         t.row(r)
     t.blank()
 
@@ -3637,6 +3685,17 @@ def _run_reports():
 
     df = read_master_df(sheets)
     print(f"Master rows loaded: {len(df)}")
+
+    # --- invalid phone => irrelevant (shared rule, common/lead_rules.py) -------
+    # pyConsolidateLeadsLoad already writes IsLeadRelevant = No for every lead
+    # with IsPhoneNumberValid = No; applying the same rule here keeps this report
+    # correct even for master rows written before that rule existed (or edited by
+    # hand). Only ever turns Yes -> No, in memory; the sheet is not modified.
+    # Every Relevant / Irrelevant / Fresh-Relevant count, tab, counsellor rollup,
+    # the email and the masked copy derive from this df.
+    df, _n_phone_irrel = lead_rules.apply_invalid_phone_irrelevance(df, C_VALID, C_RELEV)
+    print(f"Invalid-phone rule: {_n_phone_irrel} lead(s) with IsPhoneNumberValid = No "
+          f"counted as Irrelevant.")
 
     # --- exclude already-enrolled students from the counted population --------
     # A lead whose phone appears in "IntelliBI — Student Admission Responses" is

@@ -66,6 +66,10 @@ built-in defaults are used): `notes_field_mapping.json`,
 - **Lead Interaction History**: every enquiry listed chronologically; consecutive
   duplicate interactions collapsed; `Number of Interactions` reflects the deduped
   count.
+- **Invalid phone ⇒ irrelevant**: in addition to the existing relevance rules,
+  `IsLeadRelevant` is forced to `No` whenever `IsPhoneNumberValid = No`
+  (`common/lead_rules.py` — comparison ignores case, spaces, invisible characters
+  and blanks; a blank flag never marks a lead irrelevant).
 - **Flags recomputed every run**: `IsPhoneNumberValid`, `IsLeadRelevant`
   (fuzzy). Invalid/irrelevant rows are kept for review, not dropped.
 - **Business/virtual Exotel lines** (`BUSINESS_NUMBERS_SEED` + every distinct
