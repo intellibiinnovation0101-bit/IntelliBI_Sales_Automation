@@ -30,6 +30,7 @@ CONFIG_YAML = paths.CONFIG_DIR / "config.yaml"
 
 # config.yaml dotted-key  ->  environment variable the scripts read
 _KEY_TO_ENV = {
+    "network.force_ipv4": "INTELLIBI_FORCE_IPV4",
     "google.service_account_file":            "GOOGLE_SERVICE_ACCOUNT_FILE",
     "consolidation.input_mode":               "INTELLIBI_INPUT_MODE",
     "consolidation.target_sheet_id":          "INTELLIBI_TARGET_SHEET_ID",
@@ -114,4 +115,4 @@ def apply_to_environment(original_keys=None) -> None:
         val = get(dotted, None)
         if val is None or val == "":
             continue
-        os.environ[env_key] = _resolve_pathish(env_key, val)
+        os.environ[env_key] = str(_resolve_pathish(env_key, val))   # YAML bools/ints -> str

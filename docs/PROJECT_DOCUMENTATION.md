@@ -40,13 +40,14 @@ IntelliBI_Sales_Automation/
 ├── sales_data_collection/   Layer 1 entry scripts
 ├── sales_consolidation/     Layer 2 entry script
 ├── sales_reports/           Layer 3 entry scripts
-├── sales_validation/        verify_*.py — offline verification of retry handling / conversion model
+├── sales_validation/        verify_*.py — offline verification (retry handling, conversion model, invalid-phone relevance rule, …)
 ├── common/                  shared code + portability layer
 │   ├── paths.py             PROJECT_ROOT + all canonical folders (pathlib)
 │   ├── _bootstrap.py        sys.path + env defaults + config.yaml (imported first by every script)
 │   ├── config_loader.py     reads config/config.yaml -> environment
 │   ├── logging_utils.py     centralized logger factory (logs/ + console)
 │   ├── common_utils.py      subprocess runner, record-count parsing, summary e-mail
+│   ├── lead_rules.py        shared lead-flag rules (IsPhoneNumberValid = No ⇒ IsLeadRelevant = No)
 │   └── utils.py, interakt_*.py, exotel_*.py   the pipeline's shared modules
 ├── config/                  config.yaml, logging_config.yaml
 ├── credentials/             secrets & session state (git-ignored)
@@ -101,6 +102,10 @@ per-script timeout). Some deeply-embedded per-report settings (Drive folder IDs,
 there and in `config.yaml`'s reference block.
 
 `config/logging_config.yaml` sets the log level (env `SALES_LOG_LEVEL` wins).
+
+---
+
+**`network.force_ipv4`** (default `true`, env `INTELLIBI_FORCE_IPV4`): `_bootstrap.py` makes name resolution return IPv4 addresses only. Needed on networks whose IPv6 does not route (phone hotspots, some Wi-Fi): the Google client library's transport (`httplib2`) raises on the first IPv6 connect time-out — `TimeoutError: [WinError 10060]` at `sock.connect` — and never falls back to IPv4, so every Sheets/Drive call fails even though browsers work. Google's APIs are fully reachable over IPv4. Set to `false` to restore dual-stack resolution.
 
 ---
 

@@ -111,3 +111,12 @@ lead_alert:                          # Website Lead popup / acknowledgement serv
 #  Interakt (pyInteraktUsers.py):  DRIVE_FOLDER_ID / SPREADSHEET_NAME / TAB_NAME
 #  Exotel   (pyExotelCallDetails.py): SPREADSHEET_ID / TAB_NAME
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+#  Network
+# -----------------------------------------------------------------------------
+network:
+  force_ipv4: true                   # resolve API hosts to IPv4 only. Fixes runs that die
+                                     # with "WinError 10060" on networks (phone hotspots, some
+                                     # Wi-Fi) whose IPv6 does not route: the Google client
+                                     # library does not fall back to IPv4 by itself.

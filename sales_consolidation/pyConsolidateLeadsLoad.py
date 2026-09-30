@@ -54,6 +54,7 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common"))
 import _bootstrap  # noqa: E402  (sys.path + env defaults + config.yaml)
 from paths import CREDENTIALS_DIR, CONFIG_DIR, LOGS_DIR  # noqa: E402
+import lead_rules  # noqa: E402  (common/lead_rules.py — shared lead-quality rules)
 # --- end bootstrap ---
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -176,6 +177,8 @@ ANALYTICS_FIELDS = [
 #   IsPhoneNumberValid : Yes/No on the normalised mobile (with "invalid" remark
 #                        exception)
 #   IsLeadRelevant     : No if the remark indicates an irrelevant lead, else Yes
+#                        (also No when IsPhoneNumberValid = No — see
+#                        common/lead_rules.py)
 #   IsWhatsAppWebConnect: No when the lead used only Website/WhatsApp (optionally
 #                        with IntelliBI) AND Admission Status is "Unable to
 #                        Connect"; otherwise Yes
@@ -1856,10 +1859,16 @@ def merge_cluster(records):
     # so "Irrelevant", "irrelevant", "IRRELEVANT", " Irrelevant " all qualify.
     _admit_status = str(row.get("Admission Status", "")).strip().lower()
     _lead_status_rel = clean_text(row.get("Lead Status", "")).lower()
+    # Additional OR condition (existing terms left unchanged): a lead whose phone
+    # number is invalid (IsPhoneNumberValid = No, computed just above) is
+    # Irrelevant by default. Shared rule — common/lead_rules.py — so every
+    # reader of the master applies exactly the same comparison.
     row[RELEVANCE_FIELD] = "No" if (remark_flags_irrelevant(_remark)
                                     or _admit_status == "irrelevant"
                                     or remark_has_irrelevant_keyword(_remark)
-                                    or _lead_status_rel == "irrelevant") else "Yes"
+                                    or _lead_status_rel == "irrelevant"
+                                    or lead_rules.is_phone_invalid(row.get(VALIDATION_FIELD))
+                                    ) else "Yes"
 
     # interaction history + analytics
     hist, ordered, n_int = build_history(records)

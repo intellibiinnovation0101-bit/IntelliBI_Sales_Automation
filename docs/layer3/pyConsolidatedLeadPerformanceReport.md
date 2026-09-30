@@ -67,6 +67,19 @@ counts, upload ids, e-mail status).
 
 ## Notes
 
+- **% Fresh Contribution** (Summary tab → Lead Source Performance and Counsellor
+  Performance, right after `% Contribution`) = the row's `Fresh (New) Leads` ÷ total
+  Fresh (New) Leads × 100. The total uses the same basis as that table's
+  `% Contribution`: for sources, the four acquisition channels (Walk-In + Website +
+  WhatsApp + Call) so the channel shares sum to ~100%; for counsellors, all fresh
+  active leads. The per-counsellor tabs are unchanged.
+- **Invalid phone ⇒ irrelevant**: right after the master sheet is read, every lead
+  with `IsPhoneNumberValid = No` is treated as `IsLeadRelevant = No`
+  (`common/lead_rules.apply_invalid_phone_irrelevance`). The master is normally
+  already correct (Layer 2 applies the same rule); this guard keeps the report
+  right even before the next consolidation run. All Relevant / Irrelevant /
+  Fresh-Relevant counts, rates and detail rows use the adjusted value. The run
+  log prints how many leads the guard changed.
 - Deeply-embedded settings (sheet IDs, folder IDs, `EMAIL_RECIPIENTS`, masking)
   live in the script by design and are mirrored in `config/config.yaml`'s
   reference block.
