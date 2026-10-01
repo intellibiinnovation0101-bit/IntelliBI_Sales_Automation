@@ -160,6 +160,9 @@ OUTPUT_SUBFOLDERS = {
 # Same configuration/recipients as pyConsolidatedLeadPerformanceReport.py: Gmail
 # SMTP from config_files/email_config.py (GMAIL_SENDER / GMAIL_APP_PASS).
 SEND_EMAIL       = True
+# Star (★) each report e-mail in the sending Gmail account once it is sent
+# (common/gmail_star.py; best-effort — never affects sending or the run).
+STAR_EMAIL_IN_GMAIL = True
 # Email recipients are NO LONGER hardcoded — they are built LIVE from
 # config/counsellors.json (Active records only), using the SAME dynamic
 # configuration approach as pyConsolidatedLeadPerformanceReport.py.
@@ -4153,6 +4156,16 @@ def _valid_recipients(recipients):
     return out
 
 
+def _gmail_star():
+    """common/gmail_star.py, or None (with a warning) if it cannot be loaded."""
+    try:
+        import gmail_star
+        return gmail_star
+    except Exception as e:                       # noqa: BLE001
+        print("  [email] ★ starring unavailable — common/gmail_star.py:", e)
+        return None
+
+
 def send_email(subject, html_body, recipients=None):
     """Send one report e-mail. Returns True when it was sent, False otherwise.
     Temporary SMTP problems (connection drop, timeout, 4xx) are retried with
@@ -4177,6 +4190,9 @@ def send_email(subject, html_body, recipients=None):
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
+    _gs = _gmail_star() if STAR_EMAIL_IN_GMAIL else None
+    if _gs is not None:                          # lets the sent copy be found & starred
+        msg["Message-ID"] = _gs.new_message_id(sender)
     msg.attach(MIMEText(html_body, "html"))
 
     def _send():
@@ -4187,10 +4203,12 @@ def send_email(subject, html_body, recipients=None):
     try:
         api_retry.call_with_retry(_send, "SMTP: send to " + ", ".join(recipients))
         print("  [email] sent to", ", ".join(recipients))
-        return True
     except Exception as e:
         print("  [email] FAILED:", e)
         return False
+    if _gs is not None:                          # star it in Gmail — never changes the result
+        _gs.star_sent_message(sender, app_pass, msg["Message-ID"], subject)
+    return True
 
 
 def build_lfa_email_body(report_type, period_range, url, link_name, gen_stamp,
