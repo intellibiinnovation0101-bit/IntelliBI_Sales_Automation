@@ -102,6 +102,7 @@ handle this as follows (tunables in `config.yaml` → `pipeline:`).
 Verification script: `python sales_validation\verify_report_retry_handling.py` (no Google access needed).
 
 ## Change history
+- 2026-10-01 — Layer 3 now also refreshes the Google Ads remarketing audience (`google_ads_campaign_remarketing/pyGoogleAdsRemarketingAudience.py`) after the two reports, on every scheduled run. No new task or trigger; it uses the same runner, retries and completion e-mail.
 - 2026-08-24 — Added scheduling (5×/day, overlap-protected) via `run_scheduled.py` + `setup_schedule.ps1`.
 - 2026-09-26 — Transient-error retry + per-report delivery isolation for the report layer (see "Failure handling and automatic retry"); runner re-runs only when nothing was delivered.
 - 2026-09-10 — Schedule changed to 6×/day: added 18:45 and moved 20:00 → 21:00 (now 11:00, 14:00, 17:00, 18:45, 21:00, 23:00). Re-run `setup_schedule.ps1` as Administrator to apply.

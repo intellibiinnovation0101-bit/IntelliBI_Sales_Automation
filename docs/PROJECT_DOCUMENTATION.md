@@ -21,6 +21,7 @@ Layer 2  sales_consolidation      merge the 4 sources -> single master lead data
    |
    v
 Layer 3  sales_reports            performance report  +  follow-up analysis report
+         google_ads_campaign_remarketing   Google Ads remarketing audience refresh
 ```
 
 | Layer | Folder | Scripts | Purpose |
@@ -28,6 +29,7 @@ Layer 3  sales_reports            performance report  +  follow-up analysis repo
 | 1 | `sales_data_collection/` | `pyInteraktUsers.py`, `pyExotelInboxScrape.py`, `pyExotelCallDetails.py` | Collect raw WhatsApp (Interakt) and call (Exotel) data into their Google Sheets. |
 | 2 | `sales_consolidation/` | `pyConsolidateLeadsLoad.py` | De-duplicate & merge the four sources into the single "Consolidate Sales Tracking" master. |
 | 3 | `sales_reports/` | `pyConsolidatedLeadPerformanceReport.py`, `pyLeadFollowUpAnalysisReport.py` | Build the Daily/Weekly/Monthly reports, upload to Drive, and e-mail them. |
+| 3 | `google_ads_campaign_remarketing/` | `pyGoogleAdsRemarketingAudience.py` | Refresh the Google Ads remarketing phone audience (existing production sheet) + its Full Details sheet from the same master: relevant, not-enrolled leads of the last `NUMBER_OF_DAYS` (30) days. See its `README.md`. |
 
 Per-script details are in `docs/layer1/`, `docs/layer2/`, `docs/layer3/`.
 
@@ -40,6 +42,7 @@ IntelliBI_Sales_Automation/
 ├── sales_data_collection/   Layer 1 entry scripts
 ├── sales_consolidation/     Layer 2 entry script
 ├── sales_reports/           Layer 3 entry scripts
+├── google_ads_campaign_remarketing/   Layer 3 — Google Ads remarketing audience (README.md inside)
 ├── sales_validation/        verify_*.py — offline verification (retry handling, conversion model, invalid-phone relevance rule, …)
 ├── common/                  shared code + portability layer
 │   ├── paths.py             PROJECT_ROOT + all canonical folders (pathlib)
@@ -206,6 +209,7 @@ prints — **no business logic was changed** to produce them.
 | Lead Consolidation | Unique master leads, New leads inserted, Duplicates merged, Total records processed |
 | Lead Performance Report | Reports generated, Master rows read, E-mailed |
 | Follow-Up Analysis Report | Reports generated, Active leads scored, E-mailed |
+| Google Ads Remarketing Audience | Audience (phones), Added, Removed, Google Ads sheet updated (+ a note when the run kept the last audience) |
 
 A zero-valued KPI is omitted to keep the e-mail clean (except a few where 0 is
 itself meaningful, e.g. Reports generated).
