@@ -90,8 +90,8 @@ lfa = clpr.lfa                                        # pyLeadFollowUpAnalysisRe
 # =============================================================================
 # Rolling remarketing window: exactly NUMBER_OF_DAYS calendar days ending today
 # (IST) — leads with at least one enquiry in those days.
-# Example: today 01-Oct-2026, 30 → 02-Sep-2026 00:00 … 01-Oct-2026 23:59 (30 days).
-NUMBER_OF_DAYS = 30
+# Example: today 01-Oct-2026, 40 → 23-Aug-2026 00:00 … 01-Oct-2026 23:59 (40 days).
+NUMBER_OF_DAYS = 40
 
 # 1) Production Google Ads audience — the EXISTING sheet (never replaced).
 PHONE_AUDIENCE_SHEET_ID = "150HujTNz3rsSr2dZMIrs_Cdp3fsZPgJB-p3RoJVixSU"
