@@ -10,7 +10,8 @@
   Two outputs, built from ONE final dataset (they always reconcile):
     1. Phone Number Audience  — the EXISTING production sheet used by Google Ads
        ("Retargeting IntelliBi", PHONE_AUDIENCE_SHEET_ID): column A "Mobile",
-       numbers like 919876543210 (91 + 10-digit mobile, stored as numbers).
+       numbers like 919876543210 (91 + 10-digit mobile, stored as numbers);
+       column B "Email" — the lead's email when known, else blank.
     2. Full Details           — ONE persistent Google Sheet in the "Manish Leads"
        folder (FULL_DETAILS_SHEET_NAME): the same leads with their full details,
        in the same order as the phone audience.
@@ -40,6 +41,9 @@
     * phone normalisation / validity ....... sales_consolidation/pyConsolidateLeadsLoad
                                               .norm_phone / .is_valid_mobile (the
                                               rule that writes IsPhoneNumberValid)
+    * email ................................ the master's "Email Address" (written by
+                                              the consolidation), checked with its own
+                                              pyConsolidateLeadsLoad.clean_email
     * Lead Journey / Platforms Used ........ pyConsolidatedLeadPerformanceReport
                                               .format_journey / .platforms_in_sequence
 
@@ -93,6 +97,7 @@ NUMBER_OF_DAYS = 30
 PHONE_AUDIENCE_SHEET_ID = "150HujTNz3rsSr2dZMIrs_Cdp3fsZPgJB-p3RoJVixSU"
 PHONE_AUDIENCE_GID = 0                    # the tab Google Ads reads ("Sheet1")
 PHONE_AUDIENCE_HEADER = "Mobile"          # A1, kept exactly as it is
+EMAIL_AUDIENCE_HEADER = "Email"           # B1 — the lead's email (blank when unknown)
 COUNTRY_CODE = "91"                       # 91 + 10-digit mobile, written as a number
 
 # 2) Full Details — ONE persistent sheet, created once in this folder.
@@ -117,13 +122,13 @@ MAX_AUDIENCE_DROP_PCT = 60                # refuse if the audience shrinks by mo
 
 EXIT_OK, EXIT_FAILED, EXIT_RETRYABLE = 0, 1, 3
 
-FULL_COLUMNS = ["First Enquiry", "Latest Enquiry", "Full Name", "Mobile Number",
+FULL_COLUMNS = ["First Enquiry", "Latest Enquiry", "Full Name", "Mobile Number", "Email",
                 "Platforms Used", "Interactions", "Relevant", "Is Referral",
                 "Course Interested", "Notes / Remarks", "Admission Status",
                 "Backout Reason", "Counselling By", "Google Meet Sch.", "Walk-in Sch.",
                 "Lead Journey (Enquiry → Latest)", "Fresh / Repeat", "Google Ads Phone"]
 FULL_HEADER_ROW = 3                       # rows 1-2 = title + run summary, 3 = header
-FULL_WIDTHS = [150, 150, 170, 120, 170, 90, 75, 85, 190, 260, 150, 170, 130, 105, 95,
+FULL_WIDTHS = [150, 150, 170, 120, 200, 170, 90, 75, 85, 190, 260, 150, 170, 130, 105, 95,
                330, 100, 120]
 
 
@@ -167,10 +172,16 @@ def _last_contact(a):
     return max((dt for _src, dt in a.get("_inper_pairs") or []), default=datetime.min)
 
 
+def lead_email(a):
+    """The lead's email from the master's "Email Address" column, checked with the
+    consolidation's own clean_email ('' when missing / not a valid address)."""
+    return consolidation.clean_email(a.get(clpr.C_EMAIL))
+
+
 def full_detail_row(a, phone):
     c = clpr
     return [a.get(c.C_FIRST), a.get(c.C_LATEST), a.get(c.C_NAME), a.get(c.C_MOBILE),
-            c.platforms_in_sequence(a), a["_ninper"], a.get(c.C_RELEV), a.get(c.C_REF),
+            lead_email(a), c.platforms_in_sequence(a), a["_ninper"], a.get(c.C_RELEV), a.get(c.C_REF),
             a.get(c.C_COURSE), a.get(c.C_REMARKS), a.get(c.C_ADM), a.get(c.C_BACKOUT),
             a.get(c.C_COUNSEL), a.get(c.C_GMEET), a.get(c.C_WALKSCH),
             c.format_journey(a.get(c.C_HIST)), "Fresh" if a["_is_new"] else "Repeat", phone]
@@ -219,10 +230,12 @@ def build_audience(df, today: date, enrolled_phones, days: int = None) -> dict:
     ordered = sorted(best.items(), key=lambda pa: _last_contact(pa[1]), reverse=True)
     leads = [a for _p, a in ordered]
     phones = [p for p, _a in ordered]
+    emails = [lead_email(a) for _p, a in ordered]          # emails[i] belongs to phones[i]
     rows = [full_detail_row(a, p) for p, a in ordered]
     stats["final"] = len(phones)
+    stats["with_email"] = sum(1 for e in emails if e)
     return {"window": (start, end), "days": NUMBER_OF_DAYS if days is None else days,
-            "stats": stats, "leads": leads, "phones": phones, "rows": rows}
+            "stats": stats, "leads": leads, "phones": phones, "emails": emails, "rows": rows}
 
 
 def validate_audience(aud, current_phones=None):
@@ -238,6 +251,8 @@ def validate_audience(aud, current_phones=None):
         problems.append(f"{len(bad)} phone value(s) not in the 91XXXXXXXXXX format")
     if [r[-1] for r in rows] != phones:
         problems.append("Full Details rows do not match the phone audience")
+    if [r[FULL_COLUMNS.index("Email")] for r in rows] != aud.get("emails", []):
+        problems.append("Full Details emails do not match the audience emails")
     if len(phones) < MIN_AUDIENCE_SIZE:
         problems.append(f"audience has {len(phones)} lead(s) — below MIN_AUDIENCE_SIZE "
                         f"({MIN_AUDIENCE_SIZE})")
@@ -279,7 +294,8 @@ def _sheet_props(sheets, sid):
 
 def read_phone_audience(sheets):
     """(tab properties, current numbers) of the production audience; refuses if
-    its structure is not the expected single "Mobile" column."""
+    its structure is not the expected "Mobile" | "Email" columns (column B may still
+    be empty — the first run after Email was added creates it)."""
     props = next((p for p in _sheet_props(sheets, PHONE_AUDIENCE_SHEET_ID)
                   if p["sheetId"] == PHONE_AUDIENCE_GID), None)
     if props is None:
@@ -292,34 +308,51 @@ def read_phone_audience(sheets):
     if header != PHONE_AUDIENCE_HEADER:
         raise AudienceRefused(f"production sheet A1 is {header!r}, expected "
                               f"{PHONE_AUDIENCE_HEADER!r} — structure changed, not touching it")
-    if any(str(c).strip() for r in vals for c in r[1:]):
-        raise AudienceRefused("production sheet has data outside column A — "
+    b1 = str(vals[0][1]).strip() if vals and len(vals[0]) > 1 else ""
+    if b1 not in ("", EMAIL_AUDIENCE_HEADER):
+        raise AudienceRefused(f"production sheet B1 is {b1!r}, expected "
+                              f"{EMAIL_AUDIENCE_HEADER!r} — structure changed, not touching it")
+    if not b1 and any(len(r) > 1 and str(r[1]).strip() for r in vals[1:]):
+        raise AudienceRefused("production sheet has data in column B without the "
+                              f"{EMAIL_AUDIENCE_HEADER!r} header — structure changed, not touching it")
+    if any(str(c).strip() for r in vals for c in r[2:]):
+        raise AudienceRefused("production sheet has data outside columns A-B — "
                               "structure changed, not touching it")
     current = [int(r[0]) if isinstance(r[0], (int, float)) else str(r[0]).strip()
                for r in vals[1:] if r and str(r[0]).strip()]
     return props, current
 
 
-def write_phone_audience(sheets, props, phones, old_rows):
-    """Rewrite A2:A with the new audience in ONE atomic batchUpdate: values written
-    as numbers (format "0", as today), leftover old rows cleared, A1 untouched."""
+def write_phone_audience(sheets, props, phones, emails, old_rows):
+    """Rewrite A2:B with the new audience in ONE atomic batchUpdate: A = numbers
+    (format "0", as today), B = email or blank, B1 = "Email", leftover old rows
+    cleared, A1 untouched."""
     gid = props["sheetId"]
     need = len(phones) + 1
-    have = props.get("gridProperties", {}).get("rowCount", 1000)
+    grid = props.get("gridProperties", {})
+    have = grid.get("rowCount", 1000)
     reqs = []
     if need > have:
         reqs.append({"appendDimension": {"sheetId": gid, "dimension": "ROWS", "length": need - have}})
+    if grid.get("columnCount", 26) < 2:
+        reqs.append({"appendDimension": {"sheetId": gid, "dimension": "COLUMNS",
+                                         "length": 2 - grid.get("columnCount", 1)}})
+    reqs.append({"updateCells": {                       # B1 header
+        "start": {"sheetId": gid, "rowIndex": 0, "columnIndex": 1},
+        "rows": [{"values": [{"userEnteredValue": {"stringValue": EMAIL_AUDIENCE_HEADER}}]}],
+        "fields": "userEnteredValue"}})
     reqs.append({"updateCells": {
         "start": {"sheetId": gid, "rowIndex": 1, "columnIndex": 0},
         "rows": [{"values": [{"userEnteredValue": {"numberValue": p},
-                              "userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "0"}}}]}
-                 for p in phones],
+                              "userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "0"}}},
+                             {"userEnteredValue": {"stringValue": e or ""}}]}
+                 for p, e in zip(phones, emails)],
         "fields": "userEnteredValue,userEnteredFormat.numberFormat"}})
     last = max(old_rows + 1, need)
     if last > need:                                    # clear what the new list no longer covers
         reqs.append({"updateCells": {"range": {"sheetId": gid, "startRowIndex": need,
                                                "endRowIndex": last, "startColumnIndex": 0,
-                                               "endColumnIndex": 1},
+                                               "endColumnIndex": 2},
                                      "fields": "userEnteredValue"}})
     api_retry.execute(sheets.spreadsheets().batchUpdate(
         spreadsheetId=PHONE_AUDIENCE_SHEET_ID, body={"requests": reqs}),
@@ -480,7 +513,7 @@ def print_stats(aud):
           f"(Admission Confirmed excluded: {s['excluded_admission_confirmed']})")
     print(f"Invalid/unusable phone numbers excluded: {s['excluded_invalid_phone']}")
     print(f"Duplicate phone numbers removed: {s['duplicates_removed']}")
-    print(f"Final eligible audience: {s['final']}")
+    print(f"Final eligible audience: {s['final']}  (with email: {s.get('with_email', 0)})")
 
 
 def refresh(sheets_read, sheets_write, drive, today, dry_run=False) -> int:
@@ -553,10 +586,13 @@ def refresh(sheets_read, sheets_write, drive, today, dry_run=False) -> int:
               f"Production audience NOT changed.")
         return EXIT_RETRYABLE
     try:
-        write_phone_audience(sheets_write, props, aud["phones"], len(current))
-        back = read_back(sheets_write, PHONE_AUDIENCE_SHEET_ID, f"'{props['title']}'!A:A")
+        write_phone_audience(sheets_write, props, aud["phones"], aud["emails"], len(current))
+        back = read_back(sheets_write, PHONE_AUDIENCE_SHEET_ID, f"'{props['title']}'!A:B")
         live = [int(r[0]) for r in back[1:] if r and str(r[0]).strip()]
-        ok = (str(back[0][0]).strip() == PHONE_AUDIENCE_HEADER and live == aud["phones"])
+        live_em = [str(r[1]).strip() if len(r) > 1 else "" for r in back[1:] if r and str(r[0]).strip()]
+        ok = (str(back[0][0]).strip() == PHONE_AUDIENCE_HEADER
+              and len(back[0]) > 1 and str(back[0][1]).strip() == EMAIL_AUDIENCE_HEADER
+              and live == aud["phones"] and live_em == aud["emails"])
     except Exception as exc:                               # noqa: BLE001
         print(f"[audience] FAILED to update the production audience ({exc}). The batch is "
               f"all-or-nothing, so the previous audience is still in place.")
@@ -568,7 +604,8 @@ def refresh(sheets_read, sheets_write, drive, today, dry_run=False) -> int:
         append_history(sheets_write, sid, _history_row(stamp, aud, added, removed,
                                                        "FAILED — read-back mismatch"))
         return EXIT_FAILED
-    print(f"[audience] production sheet updated: {len(live)} phone number(s)")
+    print(f"[audience] production sheet updated: {len(live)} phone number(s), "
+          f"{sum(1 for e in live_em if e)} with email")
     print(f"Reconciliation (after writing): OK — both sheets hold the same {len(live)} lead(s).")
     append_history(sheets_write, sid, _history_row(stamp, aud, added, removed, "SUCCESS"))
     return EXIT_OK
