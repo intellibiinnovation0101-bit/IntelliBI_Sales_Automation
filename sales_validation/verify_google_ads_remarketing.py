@@ -287,7 +287,10 @@ for n, want in ((30, ("02-Sep-2026", "01-Oct-2026")), (7, ("25-Sep-2026", "01-Oc
 s, e, sdt, edt = G.window_bounds(T, 30)
 check("bounds are inclusive: start 00:00, end 23:59:59 (the report's day_bounds)",
       (sdt.time().isoformat(), edt.time().isoformat()[:8]), ("00:00:00", "23:59:59"))
-check("default is NUMBER_OF_DAYS = 30", G.NUMBER_OF_DAYS, 30)
+check("default is NUMBER_OF_DAYS = 40", G.NUMBER_OF_DAYS, 40)
+check("default window: 40 days → 23-Aug-2026 … 01-Oct-2026",
+      tuple(f"{x:%d-%b-%Y}" for x in G.window_bounds(T)[:2]), ("23-Aug-2026", "01-Oct-2026"))
+G.NUMBER_OF_DAYS = 30            # the scenarios below are written for a 30-day window
 for bad in (0, -1):
     try:
         G.window_bounds(T, bad)

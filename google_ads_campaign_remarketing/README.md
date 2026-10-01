@@ -51,7 +51,7 @@ python google_ads_campaign_remarketing\pyGoogleAdsRemarketingAudience.py        
   In both cases the last audience stays as it is. A trigger missed while the PC was off runs once when it is back (`StartWhenAvailable`).
 - **Failure handling:** it uses the existing logging (`logs/pyGoogleAdsRemarketingAudience.log`), the runner's automatic re-runs on exit 3 (up to 2, 5 minutes apart) and the completion e-mail (KPIs: Audience, Added, Removed, Google Ads sheet updated). It runs after both reports and its failure never stops them; the run is reported as PARTIAL.
 
-Settings are at the top of the script: `NUMBER_OF_DAYS` (30), sheet / folder ids, `EXCLUDE_NOT_INTERESTED`, `EXCLUDE_ADMISSION_CONFIRMED`, `REQUIRE_ENROLLED_LIST`, `MIN_AUDIENCE_SIZE`, `MAX_AUDIENCE_DROP_PCT`. Pin `FULL_DETAILS_SHEET_ID` if the Full Details sheet is ever renamed.
+Settings are at the top of the script: `NUMBER_OF_DAYS` (40), sheet / folder ids, `EXCLUDE_NOT_INTERESTED`, `EXCLUDE_ADMISSION_CONFIRMED`, `REQUIRE_ENROLLED_LIST`, `MIN_AUDIENCE_SIZE`, `MAX_AUDIENCE_DROP_PCT`. Pin `FULL_DETAILS_SHEET_ID` if the Full Details sheet is ever renamed.
 
 ## Access
 The service account `intellibi-data-pipeline@…` and `info@` are editors on the production sheet and on the "Manish Leads" folder. Writes act as `info@`, through the same delegated credentials the reports use for Drive. Keep these shares; removing them stops the refresh, but the last audience stays as it was.
