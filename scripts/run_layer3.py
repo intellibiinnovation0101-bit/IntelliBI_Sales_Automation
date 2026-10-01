@@ -3,12 +3,14 @@
 Layer 3 — Sales Reports.
 
 Generates the consolidated sales-performance and follow-up-analysis reports
-from the Layer 2 dataset:
+from the Layer 2 dataset, then refreshes the Google Ads remarketing audience
+from the same freshly consolidated master:
 
     pyConsolidatedLeadPerformanceReport.py
     pyLeadFollowUpAnalysisReport.py
+    google_ads_campaign_remarketing/pyGoogleAdsRemarketingAudience.py
 
-The two reports are independent; they run sequentially so their logs stay clean
+The steps are independent; they run sequentially so their logs stay clean
 and they don't contend on the Google API. Run standalone:
 
     python scripts/run_layer3.py
@@ -41,10 +43,16 @@ def run(logger=None) -> dict:
     timeout = _timeout()
     perf = paths.LAYER3_DIR / "pyConsolidatedLeadPerformanceReport.py"
     follow = paths.LAYER3_DIR / "pyLeadFollowUpAnalysisReport.py"
+    remarketing = (paths.PROJECT_ROOT / "google_ads_campaign_remarketing"
+                   / "pyGoogleAdsRemarketingAudience.py")
     scripts = [
         common_utils.run_script(perf, label="Consolidated Lead Performance Report",
                                 timeout=timeout),
         common_utils.run_script(follow, label="Lead Follow-Up Analysis Report",
+                                timeout=timeout),
+        # Google Ads remarketing audience — full refresh of the production phone
+        # sheet + the Full Details sheet; on any problem it keeps the last audience.
+        common_utils.run_script(remarketing, label="Google Ads Remarketing Audience",
                                 timeout=timeout),
     ]
     ok = all(r["status"] == "SUCCESS" for r in scripts)

@@ -53,6 +53,7 @@ TITLES = {
     "pyConsolidateLeadsLoad": "Lead Consolidation",
     "pyConsolidatedLeadPerformanceReport": "Lead Performance Report",
     "pyLeadFollowUpAnalysisReport": "Follow-Up Analysis Report",
+    "pyGoogleAdsRemarketingAudience": "Google Ads Remarketing Audience",
 }
 
 # Rule dicts:
@@ -173,6 +174,15 @@ _R = {
         {"k": "count", "label": "Reports generated", "re": r"report \|.*active leads:", "zero": "keep"},
         {"k": "last", "label": "Active leads scored", "re": r"Active leads scored:\s*(\d+)"},
         {"k": "flag", "label": "E-mailed", "re": r"\[email\] sent to", "yes": "Yes", "no": "No"},
+    ],
+    "pyGoogleAdsRemarketingAudience": [
+        {"k": "last", "label": "Audience (phones)", "re": r"Final eligible audience:\s*(\d+)"},
+        {"k": "last", "label": "Added", "re": r"Phone audience change: \+(\d+) added"},
+        {"k": "last", "label": "Removed", "re": r"Phone audience change: \+\d+ added, -(\d+) removed"},
+        {"k": "flag", "label": "Google Ads sheet updated",
+         "re": r"\[audience\] production sheet updated", "yes": "Yes", "no": "No"},
+        {"k": "note_if", "re": r"\[(audience|details)\] (REFUSED|FAILED)",
+         "note": "Audience NOT changed (last good audience kept) — see log"},
     ],
 }
 
