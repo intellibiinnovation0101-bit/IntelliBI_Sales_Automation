@@ -4,8 +4,8 @@ Keeps the Google Ads remarketing audience current. Each run selects every **rele
 
 | Output | Where | Content |
 |---|---|---|
-| **Phone Number Audience** (production, used by Google Ads) | existing sheet "Retargeting IntelliBi" `150HujTNz3rsSr2dZMIrs_Cdp3fsZPgJB-p3RoJVixSU`, tab `Sheet1` (gid 0) | A1 `Mobile` (kept as is). One number per row, `91` + 10-digit mobile (e.g. `919876543210`), stored as a **number** with format `0`, exactly like the sheet before automation. |
-| **Full Details** (internal) | one persistent sheet "Google Ads Campaign Remarketing Leads Full Details" in the "Manish Leads" folder `1cjhEZWbSGzNoGog33h7VnfI8K5PawMOj`, created on the first run and reused afterwards | Tab **Remarketing Audience**: title, run summary, then First Enquiry, Latest Enquiry, Full Name, Mobile Number, Platforms Used, Interactions, Relevant, Is Referral, Course Interested, Notes / Remarks, Admission Status, Backout Reason, Counselling By, Google Meet Sch., Walk-in Sch., Lead Journey (Enquiry → Latest), plus **Fresh / Repeat** and **Google Ads Phone** for reconciliation. Tab **Refresh History**: one line per run with the window, counts, added / removed and result. |
+| **Phone Number Audience** (production, used by Google Ads) | existing sheet "Retargeting IntelliBi" `150HujTNz3rsSr2dZMIrs_Cdp3fsZPgJB-p3RoJVixSU`, tab `Sheet1` (gid 0) | **A** `Mobile` (header kept as is): one number per row, `91` + 10-digit mobile (e.g. `919876543210`), stored as a **number** with format `0`, exactly as before. **B** `Email`: the lead's email from the master's `Email Address` (checked with the consolidation's `clean_email`), **blank when unknown**. A missing email never removes a lead. |
+| **Full Details** (internal) | one persistent sheet "Google Ads Campaign Remarketing Leads Full Details" in the "Manish Leads" folder `1cjhEZWbSGzNoGog33h7VnfI8K5PawMOj`, created on the first run and reused afterwards | Tab **Remarketing Audience**: title, run summary, then First Enquiry, Latest Enquiry, Full Name, Mobile Number, **Email**, Platforms Used, Interactions, Relevant, Is Referral, Course Interested, Notes / Remarks, Admission Status, Backout Reason, Counselling By, Google Meet Sch., Walk-in Sch., Lead Journey (Enquiry → Latest), plus **Fresh / Repeat** and **Google Ads Phone** for reconciliation. Tab **Refresh History**: one line per run with the window, counts, added / removed and result. |
 
 ## Who is in the audience
 Everything below is reused from the existing Sales code; nothing is re-implemented.
@@ -31,7 +31,7 @@ Checked on the 30-Sep master export: in the same window, the counts of leads and
    - the master or either enrolled list cannot be read (an empty enrolled list is treated as unreadable);
    - the audience would be empty (`MIN_AUDIENCE_SIZE`);
    - it would shrink by more than `MAX_AUDIENCE_DROP_PCT` (60%);
-   - the production sheet's structure changed: A1 isn't `Mobile`, or there is data outside column A.
+   - the production sheet's structure changed: A1 isn't `Mobile`, B1 isn't `Email` (or blank before the first run that adds it), or there is data outside columns A–B.
 4. Order: Full Details first, then the production audience. If Full Details fails, production is not touched.
 5. Both sheets are read back after writing and compared with the dataset.
 6. Exit codes: `0` refreshed; `3` nothing changed and safe to re-run (source or Google problem; the Layer 3 runner re-runs it like the reports); `1` refused or failed (see the log).

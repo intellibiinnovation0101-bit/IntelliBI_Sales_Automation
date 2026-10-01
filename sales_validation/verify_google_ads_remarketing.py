@@ -210,6 +210,12 @@ def prod_phones(fs):
     return [t["cells"].get((r, 0)) for r in range(1, maxr + 1)]
 
 
+def prod_emails(fs):
+    t = fs.books[G.PHONE_AUDIENCE_SHEET_ID].tabs[0]
+    maxr = max(r for r, _c in t["cells"])
+    return [t["cells"].get((r, 1), "") for r in range(1, maxr + 1)]
+
+
 # =============================================================================
 #  Synthetic master leads (real column names, the report's history format)
 # =============================================================================
@@ -218,7 +224,7 @@ COLS = list(pd.read_csv(os.path.join(ROOT, "sales_validation", "_master_header.c
 
 
 def lead(name, mobile, dates, relevant="Yes", valid="Yes", connect="", adm="", srcs=None,
-         ref="No", status="Warm"):
+         ref="No", status="Warm", email=""):
     """dates: list of datetimes (enquiries); srcs: matching sources."""
     srcs = srcs or ["Website"] * len(dates)
     fmt = "%d-%b-%Y %I:%M %p"
@@ -226,7 +232,7 @@ def lead(name, mobile, dates, relevant="Yes", valid="Yes", connect="", adm="", s
             f"Counselling By: {', '.join(['Asha'] * len(dates))}")
     return {C.C_FIRST: min(dates).strftime(fmt), C.C_LATEST: max(dates).strftime(fmt),
             C.C_INIT: min(dates).strftime(fmt), C.C_NAME: name, C.C_MOBILE: mobile,
-            C.C_EMAIL: "", C.C_PLAT: ", ".join(dict.fromkeys(srcs)), C.C_NINT: str(len(dates)),
+            C.C_EMAIL: email, C.C_PLAT: ", ".join(dict.fromkeys(srcs)), C.C_NINT: str(len(dates)),
             C.C_VALID: valid, C.C_RELEV: relevant, C.C_WACONNECT: connect, C.C_REF: ref,
             C.C_REFNAME: "", C.C_COURSE: "Power BI", C.C_REMARKS: "note", C.C_STATUS: status,
             C.C_ADM: adm, C.C_BACKOUT: "", C.C_COUNSEL: "Asha", C.C_GMEET: "No",
@@ -242,8 +248,10 @@ def d(day, h=10, m=0):
 
 
 BASE = [
-    lead("A Fresh", "9876500001", [d(T - timedelta(days=3))]),
-    lead("B Repeat", "+91 98765 00002", [d(T - timedelta(days=90)), d(T - timedelta(days=5))]),
+    lead("A Fresh", "9876500001", [d(T - timedelta(days=3))], email="a.fresh@example.com"),
+    lead("B Repeat", "+91 98765 00002", [d(T - timedelta(days=90)), d(T - timedelta(days=5))],
+         email=" B.Repeat @Example.com "),                     # cleaned by clean_email
+    lead("C2 Bad email", "9876500018", [d(T - timedelta(days=4))], email="not-an-email"),
     lead("C Edge start", "9876500003", [d(T - timedelta(days=29), 0, 0)]),        # 02-Sep 00:00 → in
     lead("D Before window", "9876500004", [d(T - timedelta(days=30), 23, 59)]),  # 01-Sep 23:59 → out
     lead("E Today late", "9876500005", [d(T, 23, 59)]),                           # today 23:59 → in
@@ -254,8 +262,8 @@ BASE = [
     lead("J Confirmed", "9876500010", [d(T - timedelta(days=2))], adm="Admission Confirmed"),
     lead("K Bad mobile", "5876500011", [d(T - timedelta(days=2))]),                 # not 6-9 start
     lead("L Short", "98765", [d(T - timedelta(days=2))]),
-    lead("M Dup old", "9876500013", [d(T - timedelta(days=9))]),
-    lead("M Dup new", "919876500013", [d(T - timedelta(days=1))]),                 # same phone, newer
+    lead("M Dup old", "9876500013", [d(T - timedelta(days=9))], email="old@example.com"),
+    lead("M Dup new", "919876500013", [d(T - timedelta(days=1))], email="new@example.com"),  # newer
     lead("O Not interested", "9876500015", [d(T - timedelta(days=2))], adm="Not Interested"),
     lead("P Lead status NI", "9876500016", [d(T - timedelta(days=2))], status="Not Interested"),
     lead("Q Enrolled (Perf list)", "9876500017", [d(T - timedelta(days=2))]),
@@ -292,13 +300,13 @@ print("\n== 2. Eligibility (reused rules) ==")
 aud = G.build_audience(df_of(BASE), T, ENROLLED, 30)
 names = [r[2] for r in aud["rows"]]
 check("final audience = in-window, relevant, connected, not enrolled, valid mobile, de-duplicated",
-      sorted(names), sorted(["A Fresh", "B Repeat", "C Edge start", "E Today late", "M Dup new"]))
+      sorted(names), sorted(["A Fresh", "B Repeat", "C Edge start", "C2 Bad email", "E Today late", "M Dup new"]))
 st = aud["stats"]
 check("counts: evaluated / irrelevant / not interested / enrolled / confirmed / invalid / duplicates / final",
       (st["evaluated"], st["excluded_irrelevant"], st["excluded_not_interested"], st["excluded_enrolled"],
        st["excluded_admission_confirmed"], st["excluded_invalid_phone"], st["duplicates_removed"],
        st["final"]),
-      (16, 3, 2, 2, 1, 2, 1, 5))
+      (17, 3, 2, 2, 1, 2, 1, 6))
 check("'Not Interested' excluded — by Admission Status AND by Lead Status (Follow-Up report's rule)",
       ("O Not interested" in names, "P Lead status NI" in names), (False, False))
 check("enrolled on EITHER list excluded (New Enroll / Student Admission Responses)",
@@ -314,22 +322,30 @@ check("phones are 91 + 10-digit mobile, as numbers, unique",
       all(isinstance(p, int) and len(str(p)) == 12 and str(p).startswith("91") for p in aud["phones"])
       and len(set(aud["phones"])) == len(aud["phones"]), True)
 check("Full Details rows ↔ phones: same leads, same order", [r[-1] for r in aud["rows"]], aud["phones"])
-check("Full Details columns (as specified, + Fresh/Repeat, Google Ads Phone)",
-      G.FULL_COLUMNS[:16], ["First Enquiry", "Latest Enquiry", "Full Name", "Mobile Number",
+check("Full Details columns (as specified, Email right after Mobile Number, + Fresh/Repeat, Google Ads Phone)",
+      G.FULL_COLUMNS[:17], ["First Enquiry", "Latest Enquiry", "Full Name", "Mobile Number", "Email",
                             "Platforms Used", "Interactions", "Relevant", "Is Referral",
                             "Course Interested", "Notes / Remarks", "Admission Status",
                             "Backout Reason", "Counselling By", "Google Meet Sch.", "Walk-in Sch.",
                             "Lead Journey (Enquiry → Latest)"])
 b = next(r for r in aud["rows"] if r[2] == "B Repeat")
 check("Repeat lead: Interactions = in-window enquiries (as the report), Journey = report's format",
-      (b[5], b[16], b[15].count("\n") + 1, b[15] == C.format_journey(BASE[1][C.C_HIST])), (1, "Repeat", 2, True))
-check("Platforms Used = report's platforms_in_sequence", b[4], C.platforms_in_sequence(BASE[1]))
+      (b[6], b[17], b[16].count("\n") + 1, b[16] == C.format_journey(BASE[1][C.C_HIST])), (1, "Repeat", 2, True))
+check("Platforms Used = report's platforms_in_sequence", b[5], C.platforms_in_sequence(BASE[1]))
+EM = {r[2]: r[4] for r in aud["rows"]}
+check("Email: from the master, cleaned by the consolidation's clean_email; blank when missing/invalid",
+      (EM["A Fresh"], EM["B Repeat"], EM["C2 Bad email"], EM["E Today late"]),
+      ("a.fresh@example.com", "b.repeat@example.com", "", ""))
+check("leads without an email are still in the audience", ("C2 Bad email" in EM, "E Today late" in EM), (True, True))
+check("duplicate phone: the email of the row that was kept (most recent enquiry)", EM["M Dup new"], "new@example.com")
+check("emails[i] belongs to phones[i] (same order as the Full Details rows)",
+      aud["emails"], [r[4] for r in aud["rows"]])
 check("newest enquiry first", names[0], "E Today late")
 check("same input → same audience (deterministic)", G.build_audience(df_of(BASE), T, ENROLLED, 30)["phones"],
       aud["phones"])
 check("NUMBER_OF_DAYS = 7 → only the last week's leads",
       sorted(r[2] for r in G.build_audience(df_of(BASE), T, ENROLLED, 7)["rows"]),
-      sorted(["A Fresh", "B Repeat", "E Today late", "M Dup new"]))
+      sorted(["A Fresh", "B Repeat", "C2 Bad email", "E Today late", "M Dup new"]))
 
 # =============================================================================
 print("\n== 3. Full refresh against the emulated production sheet ==")
@@ -357,17 +373,19 @@ G.MAX_AUDIENCE_DROP_PCT = None
 fs, dr = setup()
 rc = run(fs, dr)
 check("run 1: success", rc, G.EXIT_OK)
-check("production: A1 'Mobile' kept, values = new audience, nothing else",
-      (fs.books[G.PHONE_AUDIENCE_SHEET_ID].tabs[0]["cells"][(0, 0)], prod_phones(fs)),
-      ("Mobile", aud["phones"]))
+check("production: A1 'Mobile' kept, B1 'Email' added, phones = new audience",
+      (fs.books[G.PHONE_AUDIENCE_SHEET_ID].tabs[0]["cells"][(0, 0)],
+       fs.books[G.PHONE_AUDIENCE_SHEET_ID].tabs[0]["cells"][(0, 1)], prod_phones(fs)),
+      ("Mobile", "Email", aud["phones"]))
+check("production: column B = each lead's email, blank when unknown", prod_emails(fs), aud["emails"])
 t0 = fs.books[G.PHONE_AUDIENCE_SHEET_ID].tabs[0]
-check("production: same tab (gid 0, 'Sheet1'), only column A used, old leftover rows cleared",
+check("production: same tab (gid 0, 'Sheet1'), only columns A-B used, old leftover rows cleared",
       (t0["props"]["title"], t0["props"]["sheetId"], {c for _r, c in t0["cells"]},
-       max(r for r, _c in t0["cells"])), ("Sheet1", 0, {0}, len(aud["phones"])))
-check("production: numbers keep the '0' format", {f["numberFormat"]["pattern"] for (r, _c), f in t0["fmt"].items()
-                                                if r <= len(aud["phones"])}, {"0"})
+       max(r for r, _c in t0["cells"])), ("Sheet1", 0, {0, 1}, len(aud["phones"])))
+check("production: numbers keep the '0' format", {f["numberFormat"]["pattern"] for (r, c), f in t0["fmt"].items()
+                                                if r <= len(aud["phones"]) and c == 0}, {"0"})
 check("production updated in ONE batchUpdate (atomic)",
-      [k for sid, k in fs.batches if sid == G.PHONE_AUDIENCE_SHEET_ID], [["updateCells", "updateCells"]])
+      [k for sid, k in fs.batches if sid == G.PHONE_AUDIENCE_SHEET_ID], [["updateCells", "updateCells", "updateCells"]])
 check("Full Details created once in the remarketing folder, with the agreed name",
       (dr.created, dr.files_meta[0]["parent"], dr.files_meta[0]["name"]),
       (1, G.FULL_DETAILS_FOLDER_ID, "Google Ads Campaign Remarketing Leads Full Details"))
@@ -378,6 +396,8 @@ A = tabs[G.AUDIENCE_TAB]["cells"]
 check("Full Details header row (row 3)", [A.get((2, c)) for c in range(len(G.FULL_COLUMNS))], G.FULL_COLUMNS)
 det_phones = [A[(r, len(G.FULL_COLUMNS) - 1)] for r in range(3, 3 + len(aud["phones"]))]
 check("Full Details holds EXACTLY the production audience (same phones, same order)", det_phones, prod_phones(fs))
+check("Full Details Email column = production column B, row for row",
+      [A.get((r, 4), "") for r in range(3, 3 + len(aud["phones"]))], prod_emails(fs))
 check("Full Details Mobile Number reconciles with the audience after normalisation",
       [int("91" + G.consolidation.norm_phone(A[(r, 3)])) for r in range(3, 3 + len(aud["phones"]))], prod_phones(fs))
 H = tabs[G.HISTORY_TAB]["cells"]
@@ -447,7 +467,18 @@ check("production structure changed (A1 not 'Mobile') → refused, untouched",
       (G.EXIT_FAILED, "Phone", len(OLD)))
 fsw, drw = setup()
 fsw.books[G.PHONE_AUDIENCE_SHEET_ID].tabs[0]["cells"][(1, 1)] = "x"
-check("data outside column A → refused, untouched", (run(fsw, drw), prod_phones(fsw)), (G.EXIT_FAILED, OLD))
+check("data in column B without the 'Email' header → refused, untouched", (run(fsw, drw), prod_phones(fsw)),
+      (G.EXIT_FAILED, OLD))
+fsv, drv = setup()
+fsv.books[G.PHONE_AUDIENCE_SHEET_ID].tabs[0]["cells"][(0, 1)] = "Notes"
+check("B1 is something other than 'Email' → refused, untouched", (run(fsv, drv), prod_phones(fsv)),
+      (G.EXIT_FAILED, OLD))
+fsu, dru = setup()
+run(fsu, dru)
+fsu.books[G.PHONE_AUDIENCE_SHEET_ID].tabs[0]["cells"][(2, 2)] = "x"
+_before = (prod_phones(fsu), prod_emails(fsu))
+check("data outside columns A-B → refused, untouched", (run(fsu, dru), (prod_phones(fsu), prod_emails(fsu))),
+      (G.EXIT_FAILED, _before))
 
 # =============================================================================
 print("\n== 5. Scheduler / run summary ==")
@@ -465,7 +496,7 @@ with contextlib.redirect_stdout(buf):
 out = buf.getvalue()
 summ = exec_summary.summarize("pyGoogleAdsRemarketingAudience", out)
 check("run-summary e-mail shows the audience KPIs", summ["kpis"],
-      [("Audience (phones)", 5), ("Added", 5), ("Removed", 8), ("Google Ads sheet updated", "Yes")])
+      [("Audience (phones)", 6), ("Added", 6), ("Removed", 8), ("Google Ads sheet updated", "Yes")])
 refused = exec_summary.summarize("pyGoogleAdsRemarketingAudience",
                                  "[audience] REFUSED — x. Last audience kept.")
 check("… and flags a refused / failed run", (refused["note"], dict(refused["kpis"]).get("Google Ads sheet updated")),
@@ -475,7 +506,7 @@ check("log shows window, counts, both updates and reconciliation",
                              "Relevant leads", "Not Interested leads excluded: 2",
                              "Enrolled phones loaded: 2 unique  (New Enroll: 1, Student Admission Responses: 1)",
                              "Enrolled leads excluded", "Invalid/unusable phone numbers excluded",
-                             "Duplicate phone numbers removed", "Final eligible audience: 5",
+                             "Duplicate phone numbers removed", "Final eligible audience: 6  (with email: 3)",
                              "[details] Full Details sheet updated", "[audience] production sheet updated",
                              "Reconciliation (after writing): OK")), True)
 
