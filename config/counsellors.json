@@ -18,8 +18,8 @@
       "office_number": "7387028359",
 	  "emailid": "salesintellibi03@gmail.com",
       "date_of_joining": "21-Aug-2026",
-      "last_date_of_employment": "",
-      "current_status": "Active"
+      "last_date_of_employment": "30-Sep-2026",
+      "current_status": "Inactive"
     },
     {
       "counsellor_id": "C003",
@@ -38,6 +38,17 @@
       "office_number": "7517511490‬",
 	  "emailid": "salesintellibi04@gmail.com",
       "date_of_joining": "10-Sep-2026",
+      "last_date_of_employment": "",
+      "current_status": "Active"
+    },
+	,
+    {
+      "counsellor_id": "C005",
+      "counsellor_name": "Saurabh Devikar",
+      "rank": 3,
+      "office_number": "7387028359‬",
+	  "emailid": "salesintellibi03@gmail.com",
+      "date_of_joining": "29-Sep-2026",
       "last_date_of_employment": "",
       "current_status": "Active"
     }
