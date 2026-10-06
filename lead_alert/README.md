@@ -70,6 +70,10 @@ is the poll interval (~20s) — far faster than a human noticing an email.
    powershell -ExecutionPolicy Bypass -File lead_alert\service\setup_service_schedule.ps1
    ```
 
+   **Restart after pulling new code:** right-click `lead_alert\deploy\Restart-Server.bat`
+   → *Run as administrator*. It stops the task and the process on port 8787, starts
+   the task again and prints `/health`. Counsellor apps reconnect on their own.
+
 6. **Firewall + LAN address:** allow inbound TCP `8787` for Private networks, and
    note the PC's LAN IP (`ipconfig` → IPv4). Counsellors will use
    `http://<that-IP>:8787`. (Only needed on the LAN; nothing is exposed publicly.)
