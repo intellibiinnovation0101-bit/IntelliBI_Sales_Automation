@@ -70,20 +70,23 @@ def is_active_counsellor(email: str) -> bool:
 
 
 def name_for_email(email: str) -> str:
-    """counsellor_name for an emailid from counsellors.json (any section), using the
-    per-section display-name field. '' if not found. Used to stamp 'Counselling By'
-    with the exact name of the counsellor who accepted a lead."""
+    """Display name of the ACTIVE record for an emailid in counsellors.json, using
+    the per-section display-name field; '' if no Active record has that email.
+
+    Inactive records are ignored. A mailbox can be handed over to a new counsellor
+    (old record set to Inactive, new record Active with the same emailid), so the
+    old person's name must never be used. The alert sections are searched first,
+    then every other section. Used for 'Counselling By', the "accepted by" name
+    shown to other counsellors, and the client greeting."""
     email = (email or "").strip().lower()
     if not email:
         return ""
     cfg = _read()
-    for section, rows in cfg.items():
-        if not isinstance(rows, list):
-            continue
-        name_field = _NAME_FIELD.get(section, "counsellor_name")
-        for rec in rows:
-            if isinstance(rec, dict) and str(rec.get("emailid", "")).strip().lower() == email:
-                nm = str(rec.get(name_field, "")).strip()
-                if nm:
-                    return nm
+    sections = list(SETTINGS.alert_sections) + [
+        s for s, rows in cfg.items()
+        if isinstance(rows, list) and s not in SETTINGS.alert_sections]
+    for section in sections:
+        for rec in _active_from_section(cfg, section):
+            if rec["email"].lower() == email and rec["name"]:
+                return rec["name"]
     return ""
