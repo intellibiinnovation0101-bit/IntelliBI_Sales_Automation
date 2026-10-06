@@ -79,6 +79,50 @@ check("escalation section resolves", [r["email"] for r in
 check("is_active_counsellor true", counsellors.is_active_counsellor("H@X.com"))
 check("is_active_counsellor false", not counsellors.is_active_counsellor("o@x.com"))
 
+# ── mailbox handed over: old record Inactive, new record Active, same email ──
+tmp_json.write_text(json.dumps({
+    "counsellors": [
+        {"counsellor_name": "Harish", "emailid": "h@x.com", "current_status": "Active"},
+        {"counsellor_name": "Previous Owner", "emailid": "shared@x.com",
+         "current_status": "Inactive"},
+        {"counsellor_name": "Gone", "emailid": "gone@x.com", "current_status": "Inactive"},
+        {"counsellor_name": "Current Owner", "emailid": "Shared@x.com",
+         "current_status": "Active"},
+    ],
+    "intellibiadmin": [
+        {"intellibi_admin_name": "Admin", "emailid": "admin@x.com", "current_status": "Active"},
+    ],
+}), encoding="utf-8")
+check("handover: Active name used, not the Inactive one",
+      counsellors.name_for_email("shared@x.com") == "Current Owner")
+check("handover: recipients carry the Active name",
+      [r["name"] for r in counsellors.active_recipients()
+       if r["email"].lower() == "shared@x.com"] == ["Current Owner"])
+check("inactive-only email has no name", counsellors.name_for_email("gone@x.com") == "")
+check("other section, Active", counsellors.name_for_email("admin@x.com") == "Admin")
+check("handover: still allowed to connect", counsellors.is_active_counsellor("shared@x.com"))
+check("inactive-only email refused", not counsellors.is_active_counsellor("gone@x.com"))
+
+# on_accept stamps the live Active name, not the name stored at enrolment
+import asyncio  # noqa: E402
+_written = []
+ops._write_counselling_by = lambda lead, nm: _written.append(nm)
+ops.google_io.log_upsert = lambda *a, **k: None
+store.insert_lead({"lead_id": "L3", "name": "Test", "received_at": ops.now_str()})
+store.add_delivery("L3", "shared@x.com", "Current Owner")
+_dev = {"counsellor_email": "shared@x.com", "counsellor_name": "Previous Owner"}
+
+
+async def _accept():
+    res = await ops.on_accept(_dev, "L3")
+    await asyncio.sleep(0.2)          # let the fire-and-forget sheet write run
+    return res
+_res = asyncio.run(_accept())
+check("accept: assigned", _res.get("result") == "assigned")
+check("accept: stored name is the Active one",
+      store.get_lead("L3").get("assigned_name") == "Current Owner")
+check("accept: Counselling By gets the Active name", _written == ["Current Owner"])
+
 # ── window + row->lead ───────────────────────────────────────────────────────
 from datetime import datetime  # noqa: E402
 config.SETTINGS.active_from, config.SETTINGS.active_to = "09:30", "23:00"

@@ -132,7 +132,9 @@ async def ws(ws: WebSocket):
             store.mark_delivered(lead["lead_id"], email, ops.now_str())
         except Exception:
             break
-    await ws.send_json({"type": "HELLO", "counsellor_name": device["counsellor_name"]})
+    await ws.send_json({"type": "HELLO",
+                        "counsellor_name": counsellors.name_for_email(email)
+                        or device["counsellor_name"]})
 
     try:
         while True:

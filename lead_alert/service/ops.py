@@ -157,7 +157,11 @@ def _write_counselling_by(lead: dict, counsellor_name: str) -> None:
 
 async def on_accept(device: dict, lead_id: str) -> dict:
     """Atomic single-claim. Broadcast the outcome and return a result dict."""
-    email, name = device["counsellor_email"], device["counsellor_name"]
+    email = device["counsellor_email"]
+    # Current Active counsellor's name for this email (live from counsellors.json).
+    # The name stored at enrolment can be stale, e.g. when a mailbox was handed
+    # over to a new counsellor; it is only a fallback.
+    name = counsellors.name_for_email(email) or device["counsellor_name"]
     when = now_str()
     result = store.claim_lead(lead_id, email, name, when)
     if result == "assigned":
@@ -173,8 +177,7 @@ async def on_accept(device: dict, lead_id: str) -> dict:
         # Stamp the accepting counsellor into the source sheet's 'Counselling By'
         # column for THIS lead's row (fire-and-forget, best-effort, matched by
         # content fingerprint). Never delays or breaks the accept response.
-        sheet_name = counsellors.name_for_email(email) or name
-        asyncio.create_task(asyncio.to_thread(_write_counselling_by, lead, sheet_name))
+        asyncio.create_task(asyncio.to_thread(_write_counselling_by, lead, name))
         return {"result": "assigned", "lead_id": lead_id}
     if result == "already":
         lead = store.get_lead(lead_id)
