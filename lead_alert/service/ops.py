@@ -120,9 +120,29 @@ async def dispatch_lead(lead: dict) -> bool:
         store.mark_delivered(lead["lead_id"], em, when)
     await asyncio.to_thread(google_io.log_upsert, store.get_lead(lead["lead_id"]),
                             store.delivery_summary(lead["lead_id"]))
-    print(f"  [dispatch] {lead['lead_id']} -> notified {len(recips)} "
-          f"(online now: {len(reached)}) : {lead.get('name','')}")
+    print(f"  [dispatch] {lead['lead_id']} -> {len(recips)} Active counsellor(s), "
+          f"shown now to {len(reached)} online: {', '.join(reached) or 'NOBODY'} "
+          f": {lead.get('name','')}")
+    if recips and not reached:
+        print("  [dispatch] no counsellor is online — the lead is kept open and is "
+              "shown to each counsellor as soon as their app reconnects")
     return True
+
+
+async def resync_open_leads(ws, email: str, name: str) -> int:
+    """Show every lead still waiting for a counsellor to a (re)connecting app.
+    Covers leads dispatched while nobody was online and counsellors who became
+    Active after the lead arrived. Returns how many were sent."""
+    sent = 0
+    for lead in store.open_leads():
+        store.add_delivery(lead["lead_id"], email, name)       # no-op if present
+        await ws.send_json({"type": "NEW_LEAD", "lead": lead_public(lead),
+                            "resync": True})
+        store.mark_delivered(lead["lead_id"], email, now_str())
+        sent += 1
+    if sent:
+        print(f"  [resync] {sent} open lead(s) shown to {name or email} on reconnect")
+    return sent
 
 
 def _write_counselling_by(lead: dict, counsellor_name: str) -> None:
@@ -185,3 +205,35 @@ async def on_accept(device: dict, lead_id: str) -> dict:
                 "assigned_name": lead.get("assigned_name", ""),
                 "assigned_at": lead.get("assigned_at", "")}
     return {"result": result, "lead_id": lead_id}       # notfound | expired
+
+
+def presence_report() -> dict:
+    """Per Active counsellor: online / stale / offline / not_registered, with the
+    computers, last seen, IPs and last disconnect reason. No tokens."""
+    conns = HUB.connections()
+    devices = store.list_devices()
+    out = []
+    for r in counsellors.active_recipients():
+        em = r["email"].lower()
+        mine = [c for c in conns if c["email"] == em]
+        devs = [d for d in devices if (d["counsellor_email"] or "").lower() == em
+                and d["active"]]
+        if any(c["state"] == "online" for c in mine):
+            state = "online"
+        elif mine:
+            state = "stale"
+        elif devs:
+            state = "offline"
+        else:
+            state = "not_registered"
+        out.append({
+            "email": r["email"], "name": r["name"], "state": state,
+            "connections": mine,
+            "computers": [{k: d[k] for k in ("machine", "last_seen", "last_ip",
+                                              "last_connect_at", "last_disconnect_at",
+                                              "last_disconnect_reason", "app_version")}
+                          for d in devs],
+        })
+    return {"counsellors": out,
+            "counts": {s: sum(1 for x in out if x["state"] == s)
+                       for s in ("online", "stale", "offline", "not_registered")}}

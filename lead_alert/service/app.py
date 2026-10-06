@@ -2,21 +2,33 @@
 FastAPI application for the IntelliBI Website Lead Alert service.
 
 Endpoints
-  GET  /health              liveness + quick status
+  GET  /health              status, who is online / stale / offline / not
+                            registered, network self-check, 1-hour offline
+                            monitor, recent refused connections, warnings
   POST /enroll              register a counsellor device -> issues a bearer token
-  WS   /ws?token=...        real-time channel (NEW_LEAD / ASSIGNED / EXPIRE in;
-                            ACCEPT / OPENED / PING out)
+  WS   /ws                  real-time channel; token in "Authorization: Bearer"
+                            (apps before 2026-10-06: ?token=..., still accepted
+                            and redacted from logs)
   POST /demo/inject         inject a fake lead to test popups (guarded by the
-                            enrollment code) — safe to leave enabled
+                            enrollment code)
+  UDP  discovery_port       LAN discovery so apps find the server after an IP
+                            change (service/discovery.py)
 
-The WebSocket carries the Accept action too, so a counsellor's client needs only
-ONE outbound connection and no separate HTTP client for day-to-day use.
+Reliability (see lead_alert/PRESENCE_AND_ALERTS.md): heartbeat-based presence
+with a stale sweeper, firewall/network self-check with auto-repair, LAN
+discovery, reconnect resync of open leads, the "all counsellors offline for 1
+hour" e-mail, and a STANDBY role for any PC that is not lead_alert.server_machine.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import secrets
+import socket
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse
@@ -27,22 +39,85 @@ import counsellors
 import ops
 import background
 from hub import HUB
+import netcheck
+import discovery
+
+
+# ── never write device tokens to the log ─────────────────────────────────────
+# uvicorn logs every request path, and older counsellor apps put the token in
+# the WebSocket URL (?token=...). Redact it before it reaches the log file.
+_TOKEN_RE = re.compile(r"(token=)[^&\s\"']+")
+
+
+class _RedactTokens(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        if "token=" in msg:
+            record.msg, record.args = _TOKEN_RE.sub(r"\1***", msg), ()
+        return True
+
+
+for _name in ("uvicorn.access", "uvicorn.error", "uvicorn"):
+    logging.getLogger(_name).addFilter(_RedactTokens())
+
+
+def _this_machine() -> str:
+    try:
+        return socket.gethostname()
+    except Exception:
+        return ""
+
+
+def is_primary() -> bool:
+    """True when this computer is the configured server (or none is configured)."""
+    want = SETTINGS.server_machine
+    return not want or want.lower() == _this_machine().lower()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    tasks = []
-    if SETTINGS.enabled:
+    HUB.started_at = time.time()
+    tasks = [asyncio.create_task(background.presence_loop())]
+    print(f"  [service] presence: online = heartbeat within "
+          f"{SETTINGS.heartbeat_stale_seconds}s; sweep every "
+          f"{SETTINGS.presence_sweep_seconds}s; startup grace "
+          f"{SETTINGS.startup_grace_seconds}s")
+    if not SETTINGS.server_machine:
+        print("  [service] NOTE: lead_alert.server_machine is not set — any computer "
+              "that starts this service will poll the sheet and send e-mails.")
+    if not SETTINGS.enabled:
+        print("  [service] lead_alert.enabled = false — poller/escalation NOT started")
+    elif not is_primary():
+        print(f"  [service] STANDBY: this computer is {_this_machine()!r}, the "
+              f"configured server is {SETTINGS.server_machine!r} — not polling the "
+              f"sheet or sending e-mails here.")
+    else:
         tasks.append(asyncio.create_task(background.poll_loop()))
         tasks.append(asyncio.create_task(background.escalation_loop()))
+        if SETTINGS.offline_alert_enabled:
+            tasks.append(asyncio.create_task(background.offline_alert_loop()))
         print("  [service] background loops started")
-    else:
-        print("  [service] lead_alert.enabled = false — loops NOT started")
+    if SETTINGS.netcheck_minutes > 0:
+        tasks.append(asyncio.create_task(background.netcheck_loop()))
+    udp = None
+    if SETTINGS.discovery_port > 0:
+        try:
+            udp = await discovery.serve(store.active_tokens, SETTINGS.discovery_port,
+                                        SETTINGS.port)
+        except Exception as e:
+            print(f"  [discovery] could not listen on UDP {SETTINGS.discovery_port}: {e}")
+    urls = [f"http://{ip}:{SETTINGS.port}" for ip in discovery.local_ipv4s()]
+    print(f"  [service] counsellor apps connect to: {', '.join(urls) or '(no network)'}")
     try:
         yield
     finally:
         for t in tasks:
             t.cancel()
+        if udp is not None:
+            udp.close()
 
 
 app = FastAPI(title="IntelliBI Website Lead Alert", lifespan=lifespan)
@@ -50,13 +125,39 @@ app = FastAPI(title="IntelliBI Website Lead Alert", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
+    pres = ops.presence_report()
+    online = sorted(HUB.online_emails())
+    net = dict(netcheck.LAST)
+    warnings = []
+    if net.get("ok") is False:
+        warnings.append(net.get("summary", ""))
+    warnings.extend(net.get("warnings") or [])
+    if not online and not HUB.in_startup_grace():
+        not_reg = [c["email"] for c in pres["counsellors"] if c["state"] == "not_registered"]
+        if not_reg:
+            warnings.append("not registered on this server: " + ", ".join(not_reg))
+    if not HUB.sweeper_healthy() and not HUB.in_startup_grace():
+        warnings.append("presence sweeper is not running")
     return {
-        "status": "ok",
-        "online_counsellors": sorted(HUB.online_emails()),
+        "status": "ok" if not warnings else "degraded",
+        "online_counsellors": online,
         "active_window": ops.within_active_window(),
         "alert_sections": SETTINGS.alert_sections,
         "seeded": bool(store.meta_get("seed_v2_done")),
         "last_poll": store.meta_get("last_poll_ts"),
+        "server": {"machine": _this_machine(),
+                   "urls": [f"http://{ip}:{SETTINGS.port}" for ip in discovery.local_ipv4s()],
+                   "role": ("primary" if is_primary() else "standby"),
+                   "started_at": time.strftime("%Y-%m-%d %H:%M:%S",
+                                               time.localtime(HUB.started_at)),
+                   "in_startup_grace": HUB.in_startup_grace()},
+        "network": net,
+        "offline_alert": dict(background.offline_monitor().status(datetime.now()),
+                              enabled=SETTINGS.offline_alert_enabled,
+                              window=background.offline_window_text()),
+        "presence": pres,
+        "recent_refused_connections": list(HUB.rejections)[-10:],
+        "warnings": warnings,
     }
 
 
@@ -107,38 +208,62 @@ async def demo_inject(req: Request):
     return {"injected": lead["lead_id"]}
 
 
+def _client_ip(ws: WebSocket) -> str:
+    try:
+        return ws.client.host if ws.client else ""
+    except Exception:
+        return ""
+
+
+def _token_from(ws: WebSocket) -> str:
+    """Bearer token from the Authorization header (current app) or the ?token=
+    query (apps built before 2026-10-06 — still accepted)."""
+    auth = ws.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return ws.query_params.get("token", "")
+
+
 @app.websocket("/ws")
 async def ws(ws: WebSocket):
-    token = ws.query_params.get("token", "")
-    device = store.device_by_token(token)
+    ip = _client_ip(ws)
+    token = _token_from(ws)
+    version = ws.headers.get("x-client-version", "") or ws.query_params.get("v", "")
+    # Accept first, so a refused app gets a clear reason instead of a bare HTTP 403.
+    await ws.accept()
+    device = store.device_by_token(token) if token else None
     if not device:
+        HUB.reject("unknown computer — not registered on THIS server "
+                   "(re-register the app)", ip=ip)
+        await ws.send_json({"type": "AUTH_FAILED", "reason": "not_registered",
+                            "message": "This computer is not registered on the Lead "
+                                       "Alert server. Please re-register."})
         await ws.close(code=4001)
         return
+    email = device["counsellor_email"]
     # Only Active counsellors may connect (deactivated -> refused immediately).
-    if not counsellors.is_active_counsellor(device["counsellor_email"]):
+    if not counsellors.is_active_counsellor(email):
+        HUB.reject("counsellor is not Active in counsellors.json", ip=ip,
+                   email=email, machine=device.get("machine") or "")
+        await ws.send_json({"type": "AUTH_FAILED", "reason": "inactive",
+                            "message": f"{email} is not an Active counsellor."})
         await ws.close(code=4003)
         return
 
-    email = device["counsellor_email"]
-    await ws.accept()
-    await HUB.register(email, token, ws)
-    store.touch_device(token, ops.now_str())
-
-    # Resync: re-send any leads still open for this counsellor (reconnect / restart).
-    for lead in store.open_leads_for(email):
-        try:
-            await ws.send_json({"type": "NEW_LEAD", "lead": ops.lead_public(lead),
-                                "resync": True})
-            store.mark_delivered(lead["lead_id"], email, ops.now_str())
-        except Exception:
-            break
-    await ws.send_json({"type": "HELLO",
-                        "counsellor_name": counsellors.name_for_email(email)
-                        or device["counsellor_name"]})
-
+    name = counsellors.name_for_email(email) or device["counsellor_name"]
+    conn = await HUB.register(email, token, ws, name=name,
+                              machine=device.get("machine") or "", ip=ip,
+                              version=version)
+    store.device_connected(token, ip, ops.now_str(), version)
+    reason = "closed"
     try:
+        # Resync: every lead still waiting for a counsellor is shown again
+        # (reconnect after a network drop, app/PC/server restart).
+        await ops.resync_open_leads(ws, email, name)
+        await ws.send_json({"type": "HELLO", "counsellor_name": name})
         while True:
             msg = await ws.receive_json()
+            HUB.heartbeat(ws)                       # any message = alive
             mtype = msg.get("type")
             if mtype == "ACCEPT":
                 result = await ops.on_accept(device, str(msg.get("lead_id", "")))
@@ -148,9 +273,11 @@ async def ws(ws: WebSocket):
             elif mtype == "PING":
                 store.touch_device(token, ops.now_str())
                 await ws.send_json({"type": "PONG"})
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as e:
+        reason = f"app disconnected (code {getattr(e, 'code', '?')})"
     except Exception as e:
-        print("  [ws] error:", e)
+        reason = f"connection error: {e}"
     finally:
-        await HUB.unregister(email, token, ws)
+        reason = HUB.take_close_reason(ws) or reason
+        await HUB.unregister(email, token, ws, reason=reason)
+        store.device_disconnected(token, ops.now_str(), reason)

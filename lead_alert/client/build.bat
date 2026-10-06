@@ -9,7 +9,8 @@ REM     .venv\Scripts\activate
 REM     pip install -r ..\requirements-client.txt
 REM     build.bat
 REM
-REM  Output: dist\IntelliBILeadAlert.exe  (copy this to each counsellor PC).
+REM  Output: dist\IntelliBILeadAlert.exe, also copied to ..\deploy\ (the copy
+REM  counsellors install from), so the shipped exe always matches the code.
 REM ============================================================================
 setlocal
 pyinstaller --noconsole --onefile ^
@@ -18,6 +19,11 @@ pyinstaller --noconsole --onefile ^
   --collect-submodules pystray ^
   --collect-submodules PIL ^
   lead_alert_client.py
+if errorlevel 1 (
+    echo BUILD FAILED - deploy\IntelliBILeadAlert.exe left unchanged.
+    exit /b 1
+)
+copy /Y "dist\IntelliBILeadAlert.exe" "..\deploy\IntelliBILeadAlert.exe" >nul
 echo.
-echo Done. See dist\IntelliBILeadAlert.exe
+echo Done. dist\IntelliBILeadAlert.exe  (copied to ..\deploy\)
 endlocal

@@ -85,7 +85,19 @@ def _init(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    # In-place upgrades of an existing database (columns added later).
+    _add_columns(conn, "devices", {
+        "last_ip": "TEXT", "last_connect_at": "TEXT", "last_disconnect_at": "TEXT",
+        "last_disconnect_reason": "TEXT", "app_version": "TEXT"})
+    _add_columns(conn, "leads", {"no_online_alerted": "INTEGER DEFAULT 0"})
     conn.commit()
+
+
+def _add_columns(conn: sqlite3.Connection, table: str, cols: dict) -> None:
+    have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    for name, decl in cols.items():
+        if name not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 # ── meta (cursor) ────────────────────────────────────────────────────────────
@@ -148,6 +160,14 @@ def mark_seen(lead: dict) -> None:
         c.commit()
 
 
+def leads_since(ts: float) -> list:
+    """Website leads that arrived at/after `ts` (epoch), oldest first."""
+    rows = _connect().execute(
+        "SELECT * FROM leads WHERE status!='SEEN' AND created_ts>=? ORDER BY created_ts",
+        (ts,)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_lead(lead_id: str) -> Optional[dict]:
     row = _connect().execute(
         "SELECT * FROM leads WHERE lead_id=?", (lead_id,)).fetchone()
@@ -190,6 +210,14 @@ def claim_lead(lead_id: str, email: str, name: str, when: str) -> str:
         if cur.rowcount == 1:
             return "assigned"
         return "already" if row["status"] in ("ASSIGNED",) else "expired"
+
+
+def mark_no_online_alerted(lead_ids) -> None:
+    with _LOCK:
+        c = _connect()
+        c.executemany("UPDATE leads SET no_online_alerted=1 WHERE lead_id=?",
+                      [(i,) for i in lead_ids])
+        c.commit()
 
 
 def mark_realerted(lead_id: str) -> None:
@@ -273,6 +301,39 @@ def touch_device(token: str, when: str) -> None:
         c = _connect()
         c.execute("UPDATE devices SET last_seen=? WHERE token=?", (when, token))
         c.commit()
+
+
+def device_connected(token: str, ip: str, when: str, version: str = "") -> None:
+    with _LOCK:
+        c = _connect()
+        c.execute("UPDATE devices SET last_seen=?, last_connect_at=?, last_ip=?, "
+                  "app_version=? WHERE token=?", (when, when, ip, version, token))
+        c.commit()
+
+
+def device_disconnected(token: str, when: str, reason: str) -> None:
+    with _LOCK:
+        c = _connect()
+        c.execute("UPDATE devices SET last_disconnect_at=?, last_disconnect_reason=? "
+                  "WHERE token=?", (when, reason[:200], token))
+        c.commit()
+
+
+def list_devices() -> list:
+    """Registered computers WITHOUT their tokens (safe for /health and logs)."""
+    rows = _connect().execute(
+        "SELECT counsellor_email, counsellor_name, machine, created_at, last_seen, "
+        "last_ip, last_connect_at, last_disconnect_at, last_disconnect_reason, "
+        "app_version, active FROM devices ORDER BY lower(counsellor_email), machine"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def active_tokens() -> list:
+    """Tokens of active devices — used only to answer LAN discovery (never logged
+    or returned by any endpoint)."""
+    return [r[0] for r in _connect().execute(
+        "SELECT token FROM devices WHERE active=1").fetchall()]
 
 
 def revoke_device(token: str) -> None:

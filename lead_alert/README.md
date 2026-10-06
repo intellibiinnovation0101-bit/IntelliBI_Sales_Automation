@@ -74,9 +74,14 @@ is the poll interval (~20s) — far faster than a human noticing an email.
    → *Run as administrator*. It stops the task and the process on port 8787, starts
    the task again and prints `/health`. Counsellor apps reconnect on their own.
 
-6. **Firewall + LAN address:** allow inbound TCP `8787` for Private networks, and
-   note the PC's LAN IP (`ipconfig` → IPv4). Counsellors will use
-   `http://<that-IP>:8787`. (Only needed on the LAN; nothing is exposed publicly.)
+6. **Firewall + LAN address:** the service opens and maintains its own firewall
+   rules (TCP `8787` + UDP `8788` discovery) for **all** network types — Windows
+   often classifies office Wi-Fi as *Public*, and a Private-only rule silently
+   blocked every counsellor on 2026-10-06. `deploy\Fix-Firewall.bat` does the same
+   by hand. Counsellors use `http://<that-IP>:8787` (`ipconfig` → IPv4); if the IP
+   later changes, their apps find the server again automatically.
+   **Reliability, presence states, the 1-hour offline alert and troubleshooting:
+   see `PRESENCE_AND_ALERTS.md`.**
 
 7. **(Optional) Audit/metrics sheet:** create a Google Sheet, share it with the
    **service account** (the `client_email` in `credentials/service_account.json`)

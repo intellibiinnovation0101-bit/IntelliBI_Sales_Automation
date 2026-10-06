@@ -91,6 +91,32 @@ lead_alert:                          # Website Lead popup / acknowledgement serv
   escalate_to_section: "intellibiadmin"
   active_from: "09:30"               # operating window (local time); outside it the poller idles
   active_to: "23:00"
+  # Presence: a counsellor is ONLINE only while their app is connected AND has
+  # sent a heartbeat (every 25 s) within heartbeat_stale_seconds. Silent
+  # connections are closed as STALE; the app reconnects by itself.
+  heartbeat_stale_seconds: 75
+  presence_sweep_seconds: 15
+  startup_grace_seconds: 120         # no "nobody online" alert right after a (re)start
+  # "All counsellors offline for 1 hour" e-mail to the info address
+  # (the Active members of offline_alert_section in counsellors.json).
+  # Every day (Mon-Sun) 10:00-19:00; only offline time inside the window counts; one e-mail
+  # per offline period; resets when any counsellor comes online.
+  offline_alert_enabled: true
+  offline_alert_days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]   # counsellors work on Sundays too
+  offline_alert_from: "10:00"
+  offline_alert_to: "19:00"
+  offline_alert_after_minutes: 60
+  offline_alert_section: "intellibiadmin"
+  # Optional extra: e-mail per waiting lead when nobody is online (off; the
+  # 1-hour alert and the unacknowledged-lead escalation already cover it).
+  no_online_alert: false
+  no_online_alert_after_seconds: 60
+  no_online_alert_cooldown_min: 30
+  netcheck_minutes: 10               # Windows firewall / network self-check ("network" in /health);
+                                     # also re-checked at once whenever the network changes
+  auto_fix_firewall: true            # service (runs as SYSTEM) repairs its firewall rules itself
+  discovery_port: 8788               # UDP: apps find the server again after its IP changes
+  server_machine: ""                 # office PC's computer name (%COMPUTERNAME%); other PCs then run as STANDBY
 
 # -----------------------------------------------------------------------------
 #  Reference only — these values currently live inside the report scripts and

@@ -90,3 +90,8 @@ def name_for_email(email: str) -> str:
             if rec["email"].lower() == email and rec["name"]:
                 return rec["name"]
     return ""
+
+
+def section_recipients(section: str) -> list:
+    """[{email, name}] of the Active members of any counsellors.json section."""
+    return _active_from_section(_read(), section)
