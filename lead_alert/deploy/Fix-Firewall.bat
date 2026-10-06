@@ -16,13 +16,13 @@ if errorlevel 1 (
 set "RULE=IntelliBI Lead Alert 8787"
 netsh advfirewall firewall show rule name="%RULE%" >nul 2>&1
 if errorlevel 1 (
-    netsh advfirewall firewall add rule name="%RULE%" dir=in action=allow protocol=TCP localport=8787 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+    netsh advfirewall firewall add rule name="%RULE%" dir=in action=allow protocol=TCP localport=8787 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10
 ) else (
-    netsh advfirewall firewall set rule name="%RULE%" new enable=yes profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+    netsh advfirewall firewall set rule name="%RULE%" new enable=yes profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10
 )
 REM LAN discovery: counsellor apps find this PC again after its IP changes.
 netsh advfirewall firewall delete rule name="IntelliBI Lead Alert discovery" >nul 2>&1
-netsh advfirewall firewall add rule name="IntelliBI Lead Alert discovery" dir=in action=allow protocol=UDP localport=8788 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+netsh advfirewall firewall add rule name="IntelliBI Lead Alert discovery" dir=in action=allow protocol=UDP localport=8788 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10
 echo.
 echo Current networks (any category is fine now):
 powershell -NoProfile -Command "Get-NetConnectionProfile | Format-Table Name,NetworkCategory -AutoSize"

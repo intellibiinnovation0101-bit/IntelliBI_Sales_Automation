@@ -1,0 +1,9 @@
+# IntelliBI Lead Alert - server address(es). Edit ONLY this file; the app tries
+# the lines in order and keeps the one that works. Lines starting with # are ignored.
+
+# Office PC on the office network:
+http://192.168.1.202:8787
+
+# Optional: the office PC's private-network address (e.g. Tailscale), so alerts
+# also work across different Wi-Fi networks. Remove the # to use it:
+# http://desktop-ddrv645:8787

@@ -116,7 +116,7 @@ lead_alert:                          # Website Lead popup / acknowledgement serv
                                      # also re-checked at once whenever the network changes
   auto_fix_firewall: true            # service (runs as SYSTEM) repairs its firewall rules itself
   discovery_port: 8788               # UDP: apps find the server again after its IP changes
-  server_machine: ""                 # office PC's computer name (%COMPUTERNAME%); other PCs then run as STANDBY
+  server_machine: "DESKTOP-DDRV645"  # office PC's computer name (%COMPUTERNAME%); other PCs then run as STANDBY
 
 # -----------------------------------------------------------------------------
 #  Reference only — these values currently live inside the report scripts and

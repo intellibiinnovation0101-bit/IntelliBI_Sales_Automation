@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import socket
+import urllib.error
 import urllib.request
 
 import client_config
@@ -32,8 +33,14 @@ def enroll_request(server_url: str, email: str, code: str) -> dict:
                        "machine": _machine_name()}).encode("utf-8")
     req = urllib.request.Request(url, data=body,
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:      # server reached, request refused
+        try:                                 # (wrong code / not an Active counsellor)
+            return json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return {"error": f"server refused the registration (HTTP {e.code})"}
 
 
 def do_enroll(server_url: str, email: str, code: str) -> str:
@@ -45,13 +52,22 @@ def do_enroll(server_url: str, email: str, code: str) -> str:
         return "All three fields are required."
     if not server_url.lower().startswith(("http://", "https://")):
         server_url = "http://" + server_url
+    tried, data, last_err = [], None, None
+    for url in [server_url] + [u for u in client_config.bundled_server_urls() if u != server_url]:
+        try:
+            data = enroll_request(url, email, code)
+            server_url = url
+            break
+        except Exception as e:                 # unreachable -> try the next shipped address
+            tried.append(url)
+            last_err = e
     try:
-        data = enroll_request(server_url, email, code)
+        if data is None:
+            raise last_err or RuntimeError("no server address")
     except Exception as e:
-        return (f"Could not reach the server: {e}\n"
-                "Check the Server URL (http://<office PC IP>:8787), that the office "
-                "PC is on, and that its firewall allows port 8787 "
-                "(admin: lead_alert\\deploy\\Fix-Firewall.bat).")
+        return (f"Could not reach the server ({', '.join(tried)}): {e}\n"
+                "Check that the office PC is on and that this computer can reach it "
+                "(same office network, or the private-network app is connected).")
     if data.get("error"):
         return data["error"]
     token = data.get("token", "")
@@ -90,7 +106,8 @@ def enroll_dialog() -> bool:
 
     ttk.Label(frm, text="Server URL").grid(column=0, row=1, sticky="w")
     e_url = ttk.Entry(frm, width=40)
-    e_url.insert(0, cfg.get("server_url") or "http://")
+    shipped = client_config.bundled_server_urls()
+    e_url.insert(0, cfg.get("server_url") or (shipped[0] if shipped else "http://"))
     e_url.grid(column=1, row=1, pady=4)
 
     ttk.Label(frm, text="Your email").grid(column=0, row=2, sticky="w")

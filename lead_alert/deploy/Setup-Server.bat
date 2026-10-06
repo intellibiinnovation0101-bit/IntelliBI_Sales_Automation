@@ -35,13 +35,13 @@ REM Must not be limited to "Private": Windows often classifies office Wi-Fi as
 REM "Public", which silently blocked every counsellor PC (2026-10-06).
 netsh advfirewall firewall show rule name="IntelliBI Lead Alert 8787" >nul 2>&1
 if errorlevel 1 (
-    netsh advfirewall firewall add rule name="IntelliBI Lead Alert 8787" dir=in action=allow protocol=TCP localport=8787 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+    netsh advfirewall firewall add rule name="IntelliBI Lead Alert 8787" dir=in action=allow protocol=TCP localport=8787 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10
 ) else (
-    netsh advfirewall firewall set rule name="IntelliBI Lead Alert 8787" new enable=yes profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+    netsh advfirewall firewall set rule name="IntelliBI Lead Alert 8787" new enable=yes profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10
 )
 REM LAN discovery: counsellor apps find this PC again after its IP changes.
 netsh advfirewall firewall delete rule name="IntelliBI Lead Alert discovery" >nul 2>&1
-netsh advfirewall firewall add rule name="IntelliBI Lead Alert discovery" dir=in action=allow protocol=UDP localport=8788 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+netsh advfirewall firewall add rule name="IntelliBI Lead Alert discovery" dir=in action=allow protocol=UDP localport=8788 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10
 echo.
 
 echo Keeping this PC awake on mains power (alerts stop while the server sleeps)...

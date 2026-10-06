@@ -22,7 +22,48 @@ TOKEN_TXT = os.path.join(APP_DIR, "token.txt")
 
 DEFAULTS = {"server_url": "", "counsellor_email": "", "counsellor_name": ""}
 
-CLIENT_VERSION = "2026.10.06"
+CLIENT_VERSION = "2026.10.07"
+SERVER_URL_FILE = "server_url.txt"
+
+
+def _app_dir() -> str:
+    import sys
+    if getattr(sys, "frozen", False):                      # the built .exe
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def normalise_url(u: str) -> str:
+    u = (u or "").strip().rstrip("/")
+    if u and not u.lower().startswith(("http://", "https://")):
+        u = "http://" + u
+    return u
+
+
+def bundled_server_urls() -> list:
+    """Server addresses shipped in server_url.txt next to the app (one per line,
+    '#' = comment). The admin edits this ONE file; every install picks it up."""
+    path = os.path.join(_app_dir(), SERVER_URL_FILE)
+    out = []
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line and normalise_url(line) not in out:
+                    out.append(normalise_url(line))
+    except Exception:
+        pass
+    return out
+
+
+def candidate_server_urls() -> list:
+    """Saved address first, then the shipped ones (no duplicates)."""
+    out = []
+    for u in [load_config().get("server_url", "")] + bundled_server_urls():
+        u = normalise_url(u)
+        if u and u not in out:
+            out.append(u)
+    return out
 LOG_PATH = os.path.join(APP_DIR, "client.log")
 
 
