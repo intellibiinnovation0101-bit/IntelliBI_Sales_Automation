@@ -30,13 +30,23 @@ if not exist "credentials\lead_alert_secrets.py" (
 )
 echo.
 
-echo [3/5] Firewall rule for TCP 8787 (Private networks)...
+echo [3/5] Firewall rule for TCP 8787 (ALL network types, local subnet only)...
+REM Must not be limited to "Private": Windows often classifies office Wi-Fi as
+REM "Public", which silently blocked every counsellor PC (2026-10-06).
 netsh advfirewall firewall show rule name="IntelliBI Lead Alert 8787" >nul 2>&1
 if errorlevel 1 (
-    netsh advfirewall firewall add rule name="IntelliBI Lead Alert 8787" dir=in action=allow protocol=TCP localport=8787 profile=private
+    netsh advfirewall firewall add rule name="IntelliBI Lead Alert 8787" dir=in action=allow protocol=TCP localport=8787 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 ) else (
-    echo   Rule already present.
+    netsh advfirewall firewall set rule name="IntelliBI Lead Alert 8787" new enable=yes profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 )
+REM LAN discovery: counsellor apps find this PC again after its IP changes.
+netsh advfirewall firewall delete rule name="IntelliBI Lead Alert discovery" >nul 2>&1
+netsh advfirewall firewall add rule name="IntelliBI Lead Alert discovery" dir=in action=allow protocol=UDP localport=8788 profile=any remoteip=localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+echo.
+
+echo Keeping this PC awake on mains power (alerts stop while the server sleeps)...
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
 echo.
 
 echo [4/5] Registering auto-start service (starts with Windows)...
@@ -50,7 +60,9 @@ for /f "tokens=2 delims=:" %%I in ('ipconfig ^| findstr /c:"IPv4 Address"') do (
     set "IP=!IP: =!"
     echo        http://!IP!:8787
 )
+echo   This computer's name (put it in config.yaml lead_alert.server_machine): %COMPUTERNAME%
 echo.
 echo Done. Service is running and will auto-start with Windows.
+echo Check: http://localhost:8787/health  ("network.ok" must be true)
 popd
 pause

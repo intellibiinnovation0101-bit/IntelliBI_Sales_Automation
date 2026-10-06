@@ -22,6 +22,25 @@ TOKEN_TXT = os.path.join(APP_DIR, "token.txt")
 
 DEFAULTS = {"server_url": "", "counsellor_email": "", "counsellor_name": ""}
 
+CLIENT_VERSION = "2026.10.06"
+LOG_PATH = os.path.join(APP_DIR, "client.log")
+
+
+def setup_logging() -> str:
+    """Rotating log at %APPDATA%\\IntelliBILeadAlert\\client.log (the .exe has no
+    console, so this is where connection problems are recorded)."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+    _ensure_dir()
+    root = logging.getLogger("leadalert")
+    if not root.handlers:
+        h = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=2,
+                                encoding="utf-8")
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        root.addHandler(h)
+        root.setLevel(logging.INFO)
+    return LOG_PATH
+
 
 def _ensure_dir():
     os.makedirs(APP_DIR, exist_ok=True)

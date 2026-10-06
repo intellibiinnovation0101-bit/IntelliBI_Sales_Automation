@@ -4,3 +4,4 @@ __pycache__/
 client/build/
 client/dist/
 client/*.spec
+_backup_*/

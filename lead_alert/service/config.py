@@ -79,6 +79,46 @@ class Settings:
         # Operating window (local clock). Outside it the poller idles.
         self.active_from = str(_c("active_from", "09:30"))
         self.active_to = str(_c("active_to", "23:00"))
+        # ── Presence (who is online) ─────────────────────────────────────────
+        # A counsellor is ONLINE only while their app has an open connection AND
+        # has sent something (the app PINGs every 25 s) within this many seconds.
+        # Silent connections (sleeping laptop, dropped Wi-Fi) become STALE, are
+        # closed by the sweeper, and the app reconnects by itself.
+        self.heartbeat_stale_seconds = int(_c("heartbeat_stale_seconds", 75))
+        self.presence_sweep_seconds = int(_c("presence_sweep_seconds", 15))
+        # After a (re)start, apps need a moment to reconnect: no "nobody online"
+        # alert is sent during this window.
+        self.startup_grace_seconds = int(_c("startup_grace_seconds", 120))
+        # OPTIONAL per-lead e-mail when a lead cannot be shown to ANYONE because
+        # no counsellor is online (off by default: the 1-hour offline alert below
+        # and the existing unacknowledged-lead escalation already cover it).
+        self.no_online_alert = bool(_c("no_online_alert", False))
+        self.no_online_alert_cooldown_min = float(_c("no_online_alert_cooldown_min", 30))
+        # A lead must have waited this long with nobody online before alerting
+        # (rides out a momentary reconnect).
+        self.no_online_alert_after_seconds = int(_c("no_online_alert_after_seconds", 60))
+        # "All counsellors offline for 1 hour" e-mail (see offline_monitor.py).
+        self.offline_alert_enabled = bool(_c("offline_alert_enabled", True))
+        days = _c("offline_alert_days", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+        self.offline_alert_days = list(days) if isinstance(days, (list, tuple)) else \
+            [d.strip() for d in str(days).split(",")]
+        self.offline_alert_from = str(_c("offline_alert_from", "10:00"))
+        self.offline_alert_to = str(_c("offline_alert_to", "19:00"))
+        self.offline_alert_after_minutes = float(_c("offline_alert_after_minutes", 60))
+        self.offline_alert_section = str(_c("offline_alert_section", "intellibiadmin"))
+        # Windows firewall / network self-check (detects "counsellor PCs cannot
+        # reach this server"); minutes between checks.
+        self.netcheck_minutes = float(_c("netcheck_minutes", 10))
+        # Repair the Windows firewall rules automatically when the self-check
+        # finds them missing/wrong (the service runs as SYSTEM). Keeps counsellor
+        # PCs able to connect whatever network the office PC joins.
+        self.auto_fix_firewall = bool(_c("auto_fix_firewall", True))
+        # UDP port for LAN discovery (apps find the server after an IP change).
+        self.discovery_port = int(_c("discovery_port", 8788))
+        # Which computer is THE server (its Windows computer name). When set,
+        # any other computer that starts the service runs as STANDBY: it does
+        # not poll the sheet or send e-mails, so two PCs never double-process.
+        self.server_machine = str(_c("server_machine", "")).strip()
 
         # Links the popup can open.
         self.open_email_url = str(_c("open_email_url",

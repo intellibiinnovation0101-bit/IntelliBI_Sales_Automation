@@ -48,7 +48,10 @@ def do_enroll(server_url: str, email: str, code: str) -> str:
     try:
         data = enroll_request(server_url, email, code)
     except Exception as e:
-        return f"Could not reach the server: {e}"
+        return (f"Could not reach the server: {e}\n"
+                "Check the Server URL (http://<office PC IP>:8787), that the office "
+                "PC is on, and that its firewall allows port 8787 "
+                "(admin: lead_alert\\deploy\\Fix-Firewall.bat).")
     if data.get("error"):
         return data["error"]
     token = data.get("token", "")
@@ -99,7 +102,7 @@ def enroll_dialog() -> bool:
     e_code = ttk.Entry(frm, width=40, show="•")
     e_code.grid(column=1, row=3, pady=4)
 
-    status = ttk.Label(frm, text="", foreground="#b00020")
+    status = ttk.Label(frm, text="", foreground="#b00020", wraplength=420)
     status.grid(column=0, row=4, columnspan=2, sticky="w", pady=(6, 0))
 
     def submit():
