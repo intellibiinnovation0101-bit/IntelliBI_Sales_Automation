@@ -83,7 +83,8 @@ def main():
     root.withdraw()                      # no main window; tray only
 
     q = queue.Queue()
-    ws = WSClient(server_url, token, q, version=client_config.CLIENT_VERSION)
+    ws = WSClient(client_config.candidate_server_urls() or [server_url], token, q,
+                  version=client_config.CLIENT_VERSION)
     log.info("server %s, counsellor %s", server_url, my_email)
 
     mgr = PopupManager(

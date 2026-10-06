@@ -57,8 +57,16 @@ def _ws_url(server_url: str) -> str:
 
 
 class WSClient:
-    def __init__(self, server_url: str, token: str, out_queue, version: str = "",
+    def __init__(self, server_url, token: str, out_queue, version: str = "",
                  discovery_port: int = 8788):
+        # server_url may be ONE address or a LIST tried in turn (saved address
+        # first, then the ones shipped in server_url.txt). The first that
+        # connects is kept and reported (SERVER_MOVED) so the app saves it.
+        urls = [server_url] if isinstance(server_url, str) else list(server_url)
+        self.candidates = [u for u in urls if u] or [""]
+        self._idx = 0
+        server_url = self.candidates[0]
+        self.saved_url = server_url
         self.server_url = server_url
         self.token = token
         self.discovery_port = discovery_port
@@ -112,6 +120,14 @@ class WSClient:
                 self._fails = 0
             else:
                 self._fails += 1
+                if len(self.candidates) > 1:     # try the next known address
+                    self._idx = (self._idx + 1) % len(self.candidates)
+                    self.server_url = self.candidates[self._idx]
+                    self.url = _ws_url(self.server_url)
+                    if self._idx != 0:
+                        log.info("trying next server address %s", self.server_url)
+                        time.sleep(1)
+                        continue
                 if self._maybe_discover():
                     continue                     # new address -> connect right away
             wait = AUTH_RETRY if self._auth_failed else self._backoff
@@ -138,6 +154,10 @@ class WSClient:
             return False
         log.warning("server moved: %s -> %s", self.server_url, found)
         self.server_url, self.url = found, _ws_url(found)
+        self.saved_url = found
+        if found not in self.candidates:
+            self.candidates.insert(0, found)
+            self._idx = 0
         self._fails, self._backoff = 0, 2
         self.q.put({"type": SERVER_MOVED, "url": found})
         return True
@@ -159,6 +179,11 @@ class WSClient:
             return
         if not self._connected:          # first message = accepted by the server
             self._connected = True
+            if self.server_url != self.saved_url:          # works on another address
+                log.warning("connected via %s (saved %s) — saving it",
+                            self.server_url, self.saved_url)
+                self.saved_url = self.server_url
+                self.q.put({"type": SERVER_MOVED, "url": self.server_url})
             self._was_connected = True
             self._backoff = 2          # healthy connection -> fast reconnect next time
             log.info("connected and authenticated")

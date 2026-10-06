@@ -256,6 +256,30 @@ check("discovery: ignores unknown computers",
       discovery.build_reply(_req, ["other"], 8787, "OFFICE") is None)
 check("discovery: ignores junk", discovery.build_reply(b"hello", [_tok], 8787, "X") is None)
 
+# firewall scope: a rule limited to the same subnet is widened by auto-repair
+narrow = json.loads(json.dumps(fixed))
+narrow["rules"][0]["Remote"] = "LocalSubnet"
+r = netcheck.evaluate(narrow)
+check("netcheck: 'LocalSubnet only' rule -> still ok here, but flagged + repairable",
+      r["ok"] is True and r["repairable"] is True and any("only admits" in w for w in r["warnings"]), r)
+wide = json.loads(json.dumps(fixed))
+wide["rules"][0]["Remote"] = ("LocalSubnet,10.0.0.0/255.0.0.0,172.16.0.0/255.240.0.0,"
+                              "192.168.0.0/255.255.0.0,100.64.0.0/255.192.0.0")
+check("netcheck: rule as written by repair (Windows mask format) -> no warning",
+      netcheck.evaluate(wide)["warnings"] == [], netcheck.evaluate(wide))
+check("netcheck: repair scope includes private-network (Tailscale) range",
+      "100.64.0.0/10" in netcheck.REMOTE)
+
+# shipped server addresses (server_url.txt next to the app)
+import client_config  # noqa: E402
+_d = tempfile.mkdtemp()
+Path(_d, "server_url.txt").write_text("# comment\n\n192.168.1.202:8787\nhttp://office-pc:8787/  # name\n"
+                                      "http://192.168.1.202:8787\n", encoding="utf-8")
+client_config._app_dir = lambda: _d
+check("server_url.txt: comments skipped, http:// added, duplicates removed",
+      client_config.bundled_server_urls() == ["http://192.168.1.202:8787", "http://office-pc:8787"],
+      client_config.bundled_server_urls())
+
 # ── 2. token redaction filter ───────────────────────────────────────────────
 rec = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1,
                         '%s - "WebSocket %s" [accepted]',
@@ -427,6 +451,23 @@ check("app reconnects automatically after server restart",
       ws_client.CONNECTED in [e.get("type") for e in evr], [e.get("type") for e in evr])
 check("presence restored after restart",
       wait_for(lambda: get("/health")["online_counsellors"] == ["alpha@x.com"], 5))
+# several addresses: the first is dead, the app moves on to the next and keeps it
+qlist = queue.Queue()
+clist = ws_client.WSClient([f"http://127.0.0.1:{free_port()}", BASE], tok_a, qlist)
+clist.start()
+evl = events(qlist, 10)
+check("address list: unreachable first address -> connects via the next one and saves it",
+      any(e.get("type") == ws_client.SERVER_MOVED and e.get("url") == BASE for e in evl)
+      and ws_client.CONNECTED in [e.get("type") for e in evl], [e.get("type") for e in evl])
+clist.stop()
+
+# registration refused (wrong code) is reported as such, not as "cannot reach"
+import enroll  # noqa: E402
+client_config._app_dir = lambda: tempfile.mkdtemp()
+msg = enroll.do_enroll(BASE, "alpha@x.com", "WRONG-CODE")
+check("registration with a wrong code says so (not 'could not reach')",
+      "invalid enrollment code" in msg and "Could not reach" not in msg, msg)
+
 # server "moved": an app saved with a dead address finds the server by itself
 dead = f"http://127.0.0.1:{free_port()}"
 qmv = queue.Queue()

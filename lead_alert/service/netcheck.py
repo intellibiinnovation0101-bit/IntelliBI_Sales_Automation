@@ -34,8 +34,10 @@ import time
 
 RULE_TCP = "IntelliBI Lead Alert 8787"
 RULE_UDP = "IntelliBI Lead Alert discovery"
-# Local subnet + private ranges: works on any LAN, never opened to the internet.
-REMOTE = "localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+# Local subnet + private ranges (+ the 100.64.0.0/10 range used by private-network
+# apps such as Tailscale): works on any office Wi-Fi/LAN, never the open internet.
+REMOTE = "localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10"
+_REQUIRED = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10")
 
 _PS = r"""
 $ErrorActionPreference = 'SilentlyContinue'
@@ -54,7 +56,9 @@ function Get-AllowRules($proto, $port) {
     if ($r -and $r.Enabled.ToString() -eq 'True' -and $r.Direction.ToString() -eq 'Inbound' -and $r.Action.ToString() -eq 'Allow') {
       $pf = $r | Get-NetFirewallPortFilter
       if ($pf.Protocol -in @($proto, 'Any') -and (@($pf.LocalPort) -contains 'Any' -or @($pf.LocalPort) -contains $port)) {
-        $out += [pscustomobject]@{ Name = "$($r.DisplayName)"; Profile = $r.Profile.ToString(); Remote = ''; Kind = 'program' }
+        $af = $r | Get-NetFirewallAddressFilter
+        $out += [pscustomobject]@{ Name = "$($r.DisplayName)"; Profile = $r.Profile.ToString();
+                                   Remote = (@($af.RemoteAddress) -join ','); Kind = 'program' }
       }
     }
   }
@@ -91,6 +95,23 @@ def _list(x):
 def _profile_covers(rule_profile: str, fw_profile: str) -> bool:
     rp = (rule_profile or "").lower()
     return rp in ("any", "") or fw_profile.lower() in [p.strip() for p in rp.split(",")]
+
+
+def scope_ok(remote: str) -> bool:
+    """True when a rule's remote-address scope admits every private range
+    (any office Wi-Fi/LAN and private-network apps), not just the same subnet."""
+    import ipaddress
+    entries = [e.strip() for e in str(remote or "").split(",") if e.strip()]
+    if not entries or any(e.lower() in ("any", "*") for e in entries):
+        return True
+    nets = []
+    for e in entries:
+        try:
+            nets.append(ipaddress.ip_network(e, strict=False))
+        except ValueError:
+            pass                                      # keywords like LocalSubnet
+    return all(any(ipaddress.ip_network(r).subnet_of(n) for n in nets if n.version == 4)
+               for r in _REQUIRED)
 
 
 def _blocked_on(nets, prof, rules) -> list:
@@ -130,6 +151,17 @@ def evaluate(data: dict, port: int = 8787, udp_port: int = 8788) -> dict:
             have = ", ".join(f'"{r.get("Name")}" ({r.get("Profile")})' for r in rules) or "none"
             problems.append(f"{label}, but no enabled firewall rule allows TCP {port} on "
                             f"{fwname} networks (rules for port {port}: {have})")
+    # Scope: a rule limited to "LocalSubnet" lets in only devices on exactly the
+    # same subnet; other office networks / private-network apps would be refused.
+    if nets and rules and not problems:
+        cats = {_CATEGORY_TO_PROFILE.get(str(n.get("Category", "")).lower(), "") for n in nets}
+        covering = [r for r in rules if any(_profile_covers(str(r.get("Profile", "")), c) for c in cats)]
+        if covering and not any(scope_ok(r.get("Remote", "")) for r in covering):
+            repairable = True
+            warnings.append(f"firewall rule for TCP {port} only admits "
+                            f"{covering[0].get('Remote') or 'a limited range'} — counsellors on "
+                            f"other office networks would be refused (auto-repair widens it to "
+                            f"all private addresses)")
     if nets and "udp_rules" in data:
         for n, fwname, why in _blocked_on(nets, prof, udp_rules):
             if why == "no-rule":
