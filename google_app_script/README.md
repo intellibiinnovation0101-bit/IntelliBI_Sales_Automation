@@ -10,6 +10,7 @@ Paste each file into the Apps Script project of the Google Sheet it belongs to
 | `ProtectLeadResultSheet.gs` | same project as above | Locks the **Result** data store so counsellors can view it but not edit it by hand (see below). |
 | `ProtectHeaderRow.gs` | any sheet whose header row must not change | Locks row 1 on chosen tabs (reports look columns up by name). |
 | `WebsiteFormWebhook.gs`, `WebsiteNewAutoPopulate.gs`, `WalkInNewAutoPopulate.gs` | website / walk-in lead sheets | Intake automation for website and walk-in leads. |
+| `WalkInNewProtection.gs` | **Student Inquiry Tracker** (Walk-In workbook), same project as `WalkInNewAutoPopulate.gs` | Walk-In New: counsellors edit only the 8 counsellor columns (found by header name); every other tab read-only. Setup, rules and test checklist: `WalkInNewProtection.md`; offline tests: `node test_walkin_protection.js`. |
 
 ## Result data store — who may write, and how it is locked
 
