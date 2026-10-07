@@ -705,6 +705,11 @@ INTELLIBI_FIELD_MAP_DEFAULT = OrderedDict([
     ("Which technology are you interested in learning?", "Course Interested In"),
     ("Course Advised",                                   "Course Interested In"),
     ("What is your primary goal?",                       "Career Goal"),
+    # The IntelliBI form's "Admission Plan Time" is the same question as the
+    # master's admission-plan column (Walk-In / Website feed it under the master
+    # name). Unmapped before 07-Oct-2026, so the counsellor's latest answer never
+    # reached the master; normal source priority / Walk-In override still apply.
+    ("When are you planning to take admission?",         "Admission Plan Time"),
     ("IsReferral",                                       "Is Referral"),
     ("Referrer's Name",                                  "Referrer's Name"),
     ("Remarks",                                          "Counsellor Notes"),
@@ -1320,6 +1325,7 @@ class Stats:
         self.match_email = 0
         self.new_leads = 0
         self.failed_match = 0                  # record with no phone/name/email key
+        self.match_short_phone = 0             # one-digit-short number linked (see below)
 
 
 def cluster_interactions(interactions, stats):
@@ -1352,7 +1358,68 @@ def cluster_interactions(interactions, stats):
         if ph and ph not in phone2c:  phone2c[ph] = cid
         if em and em not in email2c:  email2c[em] = cid
 
-    return clusters
+    return link_short_numbers(clusters, phone2c, stats)
+
+
+# ---------------------------------------------------------------------------
+# 6b. ONE-DIGIT-SHORT NUMBERS  (added 07-Oct-2026)
+# ---------------------------------------------------------------------------
+# A lead sometimes types its mobile number one digit short on the Website form
+# (9 digits). Such a record has no phone key (keys need >= 10 digits) and usually
+# no e-mail, so it stayed a separate, unassigned lead even after a counsellor
+# reached the person and recorded the correct 10-digit number (IntelliBI / call /
+# WhatsApp). It is now linked to that lead ONLY when ALL hold:
+#   * the record's number has exactly 9 digits and the cluster has no phone or
+#     e-mail key of its own;
+#   * exactly ONE existing lead's 10-digit number becomes this number when one
+#     of its digits is removed (ambiguous -> never linked);
+#   * the names agree (similarity >= SHORT_PHONE_NAME_MIN on letters only).
+# Phone stays the identity; the name is only a confirmation, never a key on its
+# own. The linked record keeps its source / date in Lead Interaction History,
+# and its 9-digit number never replaces the lead's valid one.
+SHORT_PHONE_DIGITS = 9
+SHORT_PHONE_NAME_MIN = 0.85
+
+
+def _name_letters(rec):
+    return re.sub(r"[^a-z]", "", (rec.get("_name_key") or "").lower())
+
+
+def link_short_numbers(clusters, phone2c, stats):
+    deletions = defaultdict(set)                 # 9-digit form -> {10-digit phone}
+    for ph in phone2c:
+        if len(ph) == 10:
+            for i in range(10):
+                deletions[ph[:i] + ph[i + 1:]].add(ph)
+    merged_into = {}
+    for cid, recs in enumerate(clusters):
+        if any(r["_phone"] or r["_email"] for r in recs):
+            continue                             # has its own identity key
+        shorts = {re.sub(r"\D", "", r.get("_phone_any") or "") for r in recs}
+        shorts.discard("")
+        if len(shorts) != 1:
+            continue
+        short = shorts.pop()
+        if len(short) != SHORT_PHONE_DIGITS:
+            continue
+        cands = deletions.get(short, set())
+        if len(cands) != 1:
+            continue                             # none, or ambiguous
+        tgt = phone2c[next(iter(cands))]
+        while tgt in merged_into:
+            tgt = merged_into[tgt]
+        names = {_name_letters(r) for r in recs} - {""}
+        tnames = {_name_letters(r) for r in clusters[tgt]} - {""}
+        if not any(difflib.SequenceMatcher(None, a, b).ratio() >= SHORT_PHONE_NAME_MIN
+                   for a in names for b in tnames):
+            continue
+        for r in recs:
+            r["_short_phone"] = r.get("Mobile Number", "")
+            r["Mobile Number"] = ""              # never display the short number
+        clusters[tgt].extend(recs)
+        merged_into[cid] = tgt
+        stats.match_short_phone += len(recs)
+    return [c for i, c in enumerate(clusters) if i not in merged_into]
 
 
 # ---------------------------------------------------------------------------
@@ -2203,6 +2270,7 @@ def run():
         ("Matching by Phone",        stats.match_phone),
         ("Matching by Name",         stats.match_name),
         ("Matching by Email",        stats.match_email),
+        ("Linked One-Digit-Short Numbers", stats.match_short_phone),
         ("Failed Matches",           stats.failed_match),
         ("Empty Records Ignored",    stats.ignored_empty),
     ])

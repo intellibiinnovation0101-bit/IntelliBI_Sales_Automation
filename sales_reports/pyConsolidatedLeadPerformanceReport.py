@@ -60,7 +60,7 @@ GENERATE_MONTHLY_REPORT  = False
 GENERATE_MANUAL_REPORT   = False    # Manual = a custom start/end date range (see MANUAL_START_DATE / MANUAL_END_DATE)
 
 # Optional manual report periods (leave as None to use the defaults below).
-DAILY_REPORT_DATE            = None      ## e.g. "2026-09-01"
+DAILY_REPORT_DATE            = "2026-10-06" #None      ## e.g. "2026-09-01"
 WEEKLY_REPORT_REFERENCE_DATE = None      # e.g. "2026-07-30" (any day in the wanted week)
 MONTHLY_REPORT_MONTH         = None      # e.g. 7   (1-12)
 MONTHLY_REPORT_YEAR          = None      # e.g. 2026 (defaults to current year)
@@ -646,6 +646,9 @@ def source_perf(active):
     return rows
 
 
+INVALID_NUMBER_LABEL = "(Invalid number)"
+
+
 def group_by_counsellor(active):
     """Group active leads by counsellor, case/space-insensitively, so name
     variants (e.g. 'Arshkhan Pathan' vs 'ArshKhan Pathan') don't fragment.
@@ -653,7 +656,12 @@ def group_by_counsellor(active):
     groups = defaultdict(list)
     forms = defaultdict(lambda: defaultdict(int))
     for a in active:
-        raw = s(a.get(C_COUNSEL)) or "(Unassigned)"
+        # No counsellor: a lead whose number is invalid (IsPhoneNumberValid = No,
+        # shared rule common/lead_rules.py) cannot be worked, so it is shown as
+        # "(Invalid number)" rather than "(Unassigned)". Totals are unchanged.
+        raw = s(a.get(C_COUNSEL)) or (INVALID_NUMBER_LABEL
+                                      if lead_rules.is_phone_invalid(a.get(C_VALID))
+                                      else "(Unassigned)")
         key = re.sub(r"\s+", " ", raw).strip().casefold()
         groups[key].append(a)
         forms[key][raw] += 1
