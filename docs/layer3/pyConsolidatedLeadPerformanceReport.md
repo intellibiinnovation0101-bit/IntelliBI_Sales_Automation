@@ -87,6 +87,8 @@ counts, upload ids, e-mail status).
   `credentials/service_account.json` exists and the sheets/folders are shared
   with it.
 
+- 07-Oct-2026: a lead with no Counselling By whose `IsPhoneNumberValid` = No is grouped as **(Invalid number)** instead of **(Unassigned)** (counsellor table and tabs). Totals are unchanged; `(Unassigned)` now means a valid lead that nobody has worked.
+
 ## Run standalone
 
 ```bat

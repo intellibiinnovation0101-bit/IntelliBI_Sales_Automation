@@ -80,6 +80,10 @@ built-in defaults are used): `notes_field_mapping.json`,
 See `README_Consolidated_Master.md` (project root of the original repo) for the
 full field-mapping table.
 
+## Changes 07-Oct-2026
+- **IntelliBI field mapping:** the IntelliBI form's `Admission Plan Time` now feeds `When are you planning to take admission?`. It was not mapped, so the counsellor's answer never reached the master (about 140 leads had it blank). The normal source priority and the Walk-In override still apply.
+- **One-digit-short numbers:** a record whose mobile has exactly 9 digits and that has no phone or e-mail key of its own is linked to an existing lead when (a) exactly ONE lead's 10-digit number becomes this number with one digit removed, and (b) the names agree (similarity >= `SHORT_PHONE_NAME_MIN` = 0.85, letters only). An ambiguous or name-mismatched record stays a separate lead, as before. The name is only a confirmation, never a key on its own. The linked enquiry keeps its source and date in Lead Interaction History, and the lead keeps its valid 10-digit number. The execution summary shows `Linked One-Digit-Short Numbers`. Test: `sales_validation/verify_intellibi_consolidation.py`.
+
 ## How it runs
 
 1. Read the 5 sources (+ lead-type map) from Google Sheets (or CSVs in `csv` mode).
