@@ -41,7 +41,7 @@ Checked on the 30-Sep master export: in the same window, the counts of leads and
 python google_ads_campaign_remarketing\pyGoogleAdsRemarketingAudience.py --dry-run   # read live, print, write nothing
 python google_ads_campaign_remarketing\pyGoogleAdsRemarketingAudience.py             # refresh both sheets
 ```
-**Scheduled** as the last step of Sales Layer 3 (`scripts/run_layer3.py`), after the two reports, so it uses the master the same run has just consolidated.
+**Scheduled** as the FIRST step of Sales Layer 3 (`scripts/run_layer3.py`), before the two reports, so it uses the master the same run has just consolidated and the Consolidated Lead Performance Report can read the fresh Full Details sheet for its "Repeat-Retargeting Leads" metric (changed 08-Oct-2026; this script itself is unchanged).
 
 - **When:** on every run of the Windows task "IntelliBI Sales Automation" (`scripts/setup_schedule.ps1`): **11:00, 14:00, 17:00, 18:45, 21:00 and 23:00** daily, local time of the production PC. The task calls `run_scheduled.py`, which runs `run_all.py`: Layer 1 → Layer 2 → Layer 3.
 - **Not refreshed on a run when:**
