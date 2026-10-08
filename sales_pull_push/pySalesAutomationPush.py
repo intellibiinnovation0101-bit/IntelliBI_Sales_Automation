@@ -26,3 +26,5 @@ powershell -ExecutionPolicy Bypass -File .\push_all.ps1 -Message "Sales: what yo
 
 cd "C:\Users\vaibh\Documents\IntelliBI Automation\IntelliBI_Operations_Automation"
 powershell -ExecutionPolicy Bypass -File .\push_all.ps1 -Message "Operations: Regular Push..!"
+
+
