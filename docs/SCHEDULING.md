@@ -102,6 +102,7 @@ handle this as follows (tunables in `config.yaml` → `pipeline:`).
 Verification script: `python sales_validation\verify_report_retry_handling.py` (no Google access needed).
 
 ## Change history
+- 2026-10-08 — Layer 3 order changed: the Google Ads remarketing audience (`google_ads_campaign_remarketing/pyGoogleAdsRemarketingAudience.py`) now runs FIRST, then `pyConsolidatedLeadPerformanceReport.py`, then `pyLeadFollowUpAnalysisReport.py`. The performance report reads the remarketing Full Details sheet for "Repeat-Retargeting Leads", so it runs after the audience refresh has completed. Same task, timings, runner, retries and completion e-mail. If the refresh fails, the reports still run and read the last good audience.
 - 2026-10-01 — Layer 3 now also refreshes the Google Ads remarketing audience (`google_ads_campaign_remarketing/pyGoogleAdsRemarketingAudience.py`) after the two reports, on every scheduled run. No new task or trigger; it uses the same runner, retries and completion e-mail.
 - 2026-08-24 — Added scheduling (5×/day, overlap-protected) via `run_scheduled.py` + `setup_schedule.ps1`.
 - 2026-09-26 — Transient-error retry + per-report delivery isolation for the report layer (see "Failure handling and automatic retry"); runner re-runs only when nothing was delivered.

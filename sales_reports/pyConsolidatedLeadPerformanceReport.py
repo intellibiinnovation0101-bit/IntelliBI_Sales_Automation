@@ -116,6 +116,21 @@ MASTER_TAB_NAME = None            # None -> first tab
 ENROLLED_SHEET_ID = "1oaXxg3JdtxFp8lFWijIMZKaMZvS0SiglI1K2JTrN2fs"
 ENROLLED_TAB_NAME = None           # None -> first tab
 
+# ---- Google Ads remarketing audience (READ-ONLY) → "Repeat-Retargeting Leads" ----
+# The "Google Ads Campaign Remarketing Leads Full Details" sheet is rebuilt by
+# google_ads_campaign_remarketing/pyGoogleAdsRemarketingAudience.py, which runs
+# immediately BEFORE this report in Sales Layer 3 (scripts/run_layer3.py). A repeat
+# lead of the reporting period whose mobile is in that audience is counted as a
+# "Repeat-Retargeting Lead". Membership indicates POSSIBLE retargeting influence,
+# not confirmed ad attribution. This report never writes to the sheet.
+# The values below mirror that script's FULL_DETAILS_* settings.
+REMARKETING_CHECK         = True     # False -> metric/column shown as "Not available" / "N/A"
+REMARKETING_SHEET_ID      = "1uGR3ZTKjr5PgPxtUXHG_ABFPzF3KKT7W1BJ30xq8W0g"   # None -> look up by name
+REMARKETING_FOLDER_ID     = "1cjhEZWbSGzNoGog33h7VnfI8K5PawMOj"              # "Manish Leads"
+REMARKETING_SHEET_NAME    = "Google Ads Campaign Remarketing Leads Full Details"
+REMARKETING_TAB_NAME      = "Remarketing Audience"
+REMARKETING_PHONE_HEADERS = ("Google Ads Phone", "Mobile Number")   # matched on either
+
 # ---- Output Drive folders ----
 DAILY_FOLDER_ID   = "1kuGgoyseH49tiEnwmKBgz8xceF5u7uJP"
 WEEKLY_FOLDER_ID  = "1iUzEaoOS2ViCC7qH4W8Kj-DcXh3RQM_I"
@@ -149,6 +164,22 @@ ML_BANDS = None
 ML_CHANCE_COL = "_ML_CHANCE"
 ML_PRIORITY_COL = "_ML_PRIORITY"
 
+# Repeat-Retargeting: helper column attached to the master DataFrame in run()
+# (before masking, so the masked copy carries the same flags): "Yes" = mobile is
+# in the Google Ads remarketing audience, "" = not in it, "N/A" = the audience
+# could not be read (never silently treated as "not in it"). This is audience
+# membership only; the final per-period IsRetargetingLead value (retarget_status)
+# also requires an in-period INBOUND interaction — any platform except IntelliBI,
+# which is outbound counsellor follow-up.
+RETARGET_COL     = "_IS_RETARGETING"
+RETARGET_METRIC  = "Repeat-Retargeting Leads"
+RETARGET_HEADER  = "IsRetargetingLead"
+RETARGET_YES, RETARGET_NA = "Yes", "N/A"
+RETARGET_UNAVAILABLE = "Not available"
+# Set once per run by load_remarketing_audience(): {"available", "phones",
+# "updated", "sheet_id", "reason"}. None until run() populates it.
+REMARKETING_INFO = None
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVICE_ACCOUNT_FILE = os.environ.get(
     "GOOGLE_SERVICE_ACCOUNT_FILE",
@@ -176,6 +207,9 @@ IMPERSONATE_USER = os.environ.get(
 # ---- Testing / offline switches (env-driven; leave unset in production) ----
 LOCAL_MASTER_CSV = os.environ.get("REPORT_LOCAL_MASTER_CSV")   # read master from CSV instead of Sheets
 DRY_RUN          = os.environ.get("REPORT_DRY_RUN") == "1"     # build + write local xlsx, no Google I/O
+# Offline runs only: read the remarketing audience from a CSV export of its
+# "Remarketing Audience" tab instead of Google Sheets.
+LOCAL_REMARKETING_CSV = os.environ.get("REPORT_LOCAL_REMARKETING_CSV")
 OUTPUT_DIR       = os.environ.get("REPORT_OUTPUT_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "output"))
 
 MAX_COUNSELLOR_TABS = 40
@@ -822,12 +856,28 @@ def _ml_chance_of(a):
         return -1.0
 
 
-def _lead_detail_rows_plain(tab, leads):
+def _retarget_cell(a):
+    """IsRetargetingLead cell: 'Yes' / '' / 'N/A' (audience unavailable) — the
+    same retarget_status() the counts use, so cells and counts always reconcile."""
+    return retarget_status(a)
+
+
+def _with_retarget_header(headers):
+    """Copy of a lead-detail header list with IsRetargetingLead inserted right
+    after 'Walk-in Sch.' (located by name)."""
+    h = list(headers)
+    h.insert(h.index("Walk-in Sch.") + 1, RETARGET_HEADER)
+    return h
+
+
+def _lead_detail_rows_plain(tab, leads, retargeting=False):
     """ORIGINAL (pre-ML) lead-detail table: the 16 base columns, no Rank / Priority /
     Conversion Chance %, sorted by First Enquiry (oldest first). Used ONLY for the
     Daily report, where all ML output is disabled. Behaviour here is exactly what the
     report produced before the ML columns were added."""
     base = LEAD_HEADERS[3:]                 # the 16 original columns (drop the 3 ML ones)
+    if retargeting:                         # Repeat Lead Details: + IsRetargetingLead
+        base = _with_retarget_header(base)
     tab.header(base, filterable=True)
     status_ci = len(base) - 1              # 0-based col index of Lead Information Status
     for a in sorted(leads, key=lambda x: (parse_dt(x.get(C_FIRST)) or datetime.max)):
@@ -839,6 +889,7 @@ def _lead_detail_rows_plain(tab, leads):
             a.get(C_REF), city_of(a), lead_type, a.get(C_COURSE),
             a.get(C_REMARKS), a.get(C_COUNSEL), a.get(C_ADM), a.get(C_RELEV),
             plats, a["_ninper"], a.get(C_GMEET), a.get(C_WALKSCH),
+            *([_retarget_cell(a)] if retargeting else []),
             status,
         ])
         _ri = len(tab.rows) - 1
@@ -847,13 +898,17 @@ def _lead_detail_rows_plain(tab, leads):
                                             else (CLR_RED, HEX["RED"]))
 
 
-def lead_detail_rows(tab, leads, ml_on=True):
+def lead_detail_rows(tab, leads, ml_on=True, retargeting=False):
+    # retargeting=True (Repeat Lead Details tab + the counsellor tabs' Repeat
+    # sections) adds the IsRetargetingLead column right after "Walk-in Sch.";
+    # every other lead table is unchanged.
     # Daily report: no ML — render the original table (no Rank/Priority/Chance).
     if not ml_on:
-        _lead_detail_rows_plain(tab, leads)
+        _lead_detail_rows_plain(tab, leads, retargeting)
         return
-    tab.header(LEAD_HEADERS, filterable=True)
-    status_ci = len(LEAD_HEADERS) - 1     # 0-based col index of Lead Information Status
+    headers = _with_retarget_header(LEAD_HEADERS) if retargeting else LEAD_HEADERS
+    tab.header(headers, filterable=True)
+    status_ci = len(headers) - 1          # 0-based col index of Lead Information Status
     if getattr(tab, "row_fills", None) is None:
         tab.row_fills = {}
     # Rank every lead-detail tab by Conversion Chance % (highest first), so Rank
@@ -877,6 +932,7 @@ def lead_detail_rows(tab, leads, ml_on=True):
             a.get(C_REF), city_of(a), lead_type, a.get(C_COURSE),
             a.get(C_REMARKS), a.get(C_COUNSEL), a.get(C_ADM), a.get(C_RELEV),
             plats, a["_ninper"], a.get(C_GMEET), a.get(C_WALKSCH),
+            *([_retarget_cell(a)] if retargeting else []),
             status,
         ])
         _ri = len(tab.rows) - 1
@@ -962,11 +1018,27 @@ def add_report_header(tab, title_text, period_range, gen_stamp, multiline=False)
     tab.blank()
 
 
-def add_exec_summary(tab, active):
+def retargeting_summary_value(active):
+    """(value, %) for the Repeat-Retargeting Leads metric — % of Total Leads like
+    every other row of the Executive Summary; ('Not available', '') when the
+    remarketing audience could not be read."""
+    if not retargeting_available(active):
+        return RETARGET_UNAVAILABLE, ""
+    n = retargeting_count(active)
+    return n, pct(n, len(active))
+
+
+def add_exec_summary(tab, active, retargeting=False):
+    # retargeting=True (Summary tab only): adds "Repeat-Retargeting Leads" right
+    # after "Total Lead Interactions". exec_summary() itself (also used by the
+    # counsellor tabs and the e-mail) is unchanged.
     tab.title("Executive Summary")
     tab.header(["Metric", "Value", "% of Total Leads"])
     for metric, (val, p) in exec_summary(active).items():
         tab.row([metric, val, p], kpi=(metric in EXEC_KPI))
+        if retargeting and metric == "Total Lead Interactions":
+            rv, rp = retargeting_summary_value(active)
+            tab.row([RETARGET_METRIC, rv, rp])
     tab.blank()
 
 
@@ -1188,7 +1260,7 @@ def build_summary_tab(period_label, period_range, active, gen_stamp,
         t.avg_line = {"row": 1, "segments": segs, "text": text, "size": 13}
         t.blank()                                 # separator before the table
 
-    add_exec_summary(t, active)
+    add_exec_summary(t, active, retargeting=True)
 
     t.title("Lead Source Performance")
     t.header(with_fresh_contribution_header(SRC_HEADER))
@@ -1284,6 +1356,37 @@ def _apply_metric_header_line(tab, leads, start=None, end=None):
         (_SEP + "Google Meet & Walk-In %:  ", CLR_SUB_FG, HEX["SUB_FG"]),
         (f"{_mw_pct:.1f}%", _mw_rgb, _mw_hex),
     ]
+    text = "".join(seg[0] for seg in segs)
+    if len(tab.rows) > 1:
+        tab.rows[1] = [text]                       # replace the blank second line
+    else:
+        tab.rows.append([text])
+    tab.avg_line = {"row": 1, "segments": segs, "text": text, "size": 13}
+    tab.blank()
+
+
+def _apply_repeat_header_line(tab, repeat):
+    """Repeat Lead Details header line (second header row, same colour-run style as
+    the Summary / counsellor tabs):
+        Total Repeat Leads: N  |  Repeat-Retargeting Leads: M (x% of repeat leads)
+    plus the remarketing audience's 'Updated' time. Total Repeat Leads equals the
+    Executive Summary's 'Repeat Leads'; Repeat-Retargeting Leads equals the Summary
+    metric of the same name and the number of 'Yes' rows in IsRetargetingLead."""
+    _SEP = "     |     "
+    total = len(repeat)
+    segs = [("Total Repeat Leads:  ", CLR_SUB_FG, HEX["SUB_FG"]),
+            (str(total), CLR_SUB_FG, HEX["SUB_FG"]),
+            (_SEP + RETARGET_METRIC + ":  ", CLR_SUB_FG, HEX["SUB_FG"])]
+    if retargeting_available(repeat):
+        n = retargeting_count(repeat)
+        segs.append((f"{n}  ({pct(n, total)} of repeat leads)", CLR_SUB_FG, HEX["SUB_FG"]))
+        upd = s((REMARKETING_INFO or {}).get("updated"))
+        if upd:
+            segs.append((_SEP + "Remarketing audience updated:  " + upd,
+                         CLR_SUB_FG, HEX["SUB_FG"]))
+    else:
+        segs.append((RETARGET_UNAVAILABLE + "  (remarketing sheet could not be read)",
+                     TXT_RED, TXT_RED_HEX))
     text = "".join(seg[0] for seg in segs)
     if len(tab.rows) > 1:
         tab.rows[1] = [text]                       # replace the blank second line
@@ -2273,9 +2376,10 @@ def build_report(period_label, period_range, df, start, end):
     repeat_tab = Tab("Repeat Lead Details")
     add_report_header(repeat_tab, f"Repeat Lead Details  ({period_label})",
                       period_range, gen_stamp)
+    _apply_repeat_header_line(repeat_tab, repeat)    # Total Repeat / Repeat-Retargeting
     repeat_tab.title(f"Repeat Leads in Period — enquired again via any platform  "
                      f"({len(repeat)})")
-    lead_detail_rows(repeat_tab, repeat, ml_on)
+    lead_detail_rows(repeat_tab, repeat, ml_on, retargeting=True)
     tabs["Repeat Lead Details"] = repeat_tab
 
     groups, disp = group_by_counsellor(active)
@@ -2315,9 +2419,14 @@ def build_report(period_label, period_range, df, start, end):
         else:
             tb.row(["(no fresh leads in this period)"])
         tb.blank()
-        tb.title(f"Repeat Lead Details  ({len(cb_repeat)})")
+        # Repeat section: same IsRetargetingLead column as the Repeat Lead Details
+        # tab, and this counsellor's Repeat-Retargeting count in the title.
+        _cb_rt = (str(retargeting_count(cb_repeat)) if retargeting_available(cb_repeat)
+                  else RETARGET_UNAVAILABLE)
+        tb.title(f"Repeat Lead Details  ({len(cb_repeat)})     |     "
+                 f"{RETARGET_METRIC}:  {_cb_rt}")
         if cb_repeat:
-            lead_detail_rows(tb, cb_repeat, ml_on)
+            lead_detail_rows(tb, cb_repeat, ml_on, retargeting=True)
         else:
             tb.row(["(no repeat leads in this period)"])
         tabs[tname] = tb
@@ -2541,6 +2650,213 @@ def load_enrolled_mobiles(sheets=None):
         print(f"  [enrolled] could not load Student Admission Responses "
               f"({exc}); no exclusion applied.")
         return set()
+
+
+# ============================================================
+# Google Ads remarketing audience → Repeat-Retargeting Leads (read-only)
+# ============================================================
+def _phone_cell_key(value):
+    """10-digit match key for a remarketing phone cell. Same norm_phone() rule as
+    every other match in this report; a numeric cell read back as a float
+    (917012345678.0) is turned into its integer digits first."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    # The same number exported as text ("919012345678.0") — drop the ".0" first
+    # so it never contributes a stray trailing digit.
+    value = re.sub(r"^(\s*\+?\d+)\.0+\s*$", r"\1", s(value))
+    return norm_phone(value)
+
+
+def parse_remarketing_values(values):
+    """(set of 10-digit mobiles, 'Updated …' text) from the rows of the
+    'Remarketing Audience' tab (title, run summary, header, data). The header row is
+    found by NAME (any of REMARKETING_PHONE_HEADERS), never by position. Raises
+    ValueError when the layout is not recognised or the audience is empty — the
+    remarketing script never publishes an empty audience, so an empty read means the
+    data is unusable, not that nobody matched."""
+    hdr_i = next((i for i, r in enumerate(values[:10])
+                  if any(s(c) in REMARKETING_PHONE_HEADERS for c in r)), None)
+    if hdr_i is None:
+        raise ValueError("phone column header (%s) not found"
+                         % " / ".join(REMARKETING_PHONE_HEADERS))
+    header = [s(c) for c in values[hdr_i]]
+    idx = [i for i, h in enumerate(header) if h in REMARKETING_PHONE_HEADERS]
+    phones = set()
+    for r in values[hdr_i + 1:]:
+        for i in idx:
+            if i < len(r):
+                key = _phone_cell_key(r[i])
+                if len(key) == 10:
+                    phones.add(key)
+    if not phones:
+        raise ValueError("the audience tab has no phone numbers")
+    updated = ""
+    for r in values[:hdr_i]:
+        m = re.search(r"Updated\s+(.+?)\s*$", " ".join(s(c) for c in r))
+        if m:
+            updated = m.group(1)
+    return phones, updated
+
+
+def _remarketing_sheet_ids(drive):
+    """Candidate spreadsheet ids: the pinned id first, then the sheet found by name
+    in the remarketing folder (read-only lookup — never creates anything)."""
+    ids = [REMARKETING_SHEET_ID] if REMARKETING_SHEET_ID else []
+    try:
+        if drive is None:
+            drive = get_drive_service()
+        name = REMARKETING_SHEET_NAME.replace("'", "\\'")
+        files = api_retry.execute(drive.files().list(
+            q=(f"'{REMARKETING_FOLDER_ID}' in parents and name = '{name}' and "
+               f"mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"),
+            fields="files(id,createdTime)", orderBy="createdTime",
+            supportsAllDrives=True, includeItemsFromAllDrives=True),
+            "Drive: find remarketing Full Details sheet").get("files", [])
+        for f in files[:1]:                      # the oldest — same rule as the script
+            if f["id"] not in ids:
+                ids.append(f["id"])
+    except (Exception, SystemExit) as exc:          # noqa: BLE001
+        print(f"  [remarketing] lookup by name skipped ({exc}).")
+    return ids
+
+
+def load_remarketing_audience(sheets=None, drive=None):
+    """Read the Google Ads remarketing audience ONCE per run. Never raises.
+    Returns {"available", "phones", "updated", "sheet_id", "reason"}; when the
+    audience cannot be read, available=False and the report shows the metric as
+    "Not available" and the column as "N/A" — leads are never wrongly reported as
+    "not retargeted"."""
+    info = {"available": False, "phones": set(), "updated": "", "sheet_id": "",
+            "reason": ""}
+    if not REMARKETING_CHECK:
+        info["reason"] = "check switched off (REMARKETING_CHECK = False)"
+        return info
+    try:
+        if LOCAL_REMARKETING_CSV:
+            import csv
+            with open(LOCAL_REMARKETING_CSV, newline="", encoding="utf-8-sig") as fh:
+                values = list(csv.reader(fh))
+            info["sheet_id"] = LOCAL_REMARKETING_CSV
+        elif LOCAL_MASTER_CSV:
+            info["reason"] = "offline run (REPORT_LOCAL_MASTER_CSV) — remarketing sheet not read"
+            print(f"  [remarketing] {info['reason']}.")
+            return info
+        else:
+            # The sheet is owned by the Workspace user (written by the remarketing
+            # script with the impersonated drive-scope client), so read it the same
+            # way; fall back to the service-account reader if that is unavailable.
+            clients = []
+            try:
+                from googleapiclient.discovery import build
+                clients.append(build("sheets", "v4",
+                                     credentials=_creds(DRIVE_SCOPES, impersonate=True),
+                                     cache_discovery=False))
+            except (Exception, SystemExit) as exc:  # noqa: BLE001
+                print(f"  [remarketing] impersonated reader unavailable ({exc}).")
+            if sheets is not None:
+                clients.append(sheets)
+            values, errors = None, []
+            for sid in _remarketing_sheet_ids(drive):
+                for cl in clients:
+                    try:
+                        values = api_retry.execute(cl.spreadsheets().values().get(
+                            spreadsheetId=sid, range=f"'{REMARKETING_TAB_NAME}'",
+                            valueRenderOption="UNFORMATTED_VALUE"),
+                            "Sheets: read remarketing audience").get("values", [])
+                        info["sheet_id"] = sid
+                        break
+                    except Exception as exc:        # noqa: BLE001
+                        errors.append(api_retry.short_error(exc, 160))
+                if values is not None:
+                    break
+            if values is None:
+                raise RuntimeError("; ".join(errors) or "no sheet/client available")
+        info["phones"], info["updated"] = parse_remarketing_values(values)
+        info["available"] = True
+        print(f"  [remarketing] audience loaded: {len(info['phones'])} mobile(s)"
+              f"{' (updated ' + info['updated'] + ')' if info['updated'] else ''}.")
+    except Exception as exc:                        # noqa: BLE001 — degrade safely
+        info["phones"] = set()
+        info["reason"] = str(exc)
+        print(f"  [remarketing] audience NOT available ({exc}); "
+              f"'{RETARGET_METRIC}' shown as '{RETARGET_UNAVAILABLE}'.")
+    return info
+
+
+def flag_retargeting(df, info):
+    """Copy of df with RETARGET_COL attached: 'Yes' when the lead's mobile (same
+    norm_phone key used for every match in this report) is in the remarketing
+    audience, '' when it is not, 'N/A' for every lead when the audience could not
+    be read. Must run BEFORE mask_dataframe so the masked copy keeps the flags."""
+    d = df.copy()
+    if C_MOBILE not in d.columns:
+        d[RETARGET_COL] = RETARGET_NA
+        return d
+    if not (info and info.get("available")):
+        d[RETARGET_COL] = RETARGET_NA
+        return d
+    phones = info["phones"]
+    d[RETARGET_COL] = d[C_MOBILE].map(
+        lambda v: RETARGET_YES if norm_phone(v) and norm_phone(v) in phones else "")
+    return d
+
+
+def retargeting_available(leads):
+    """True when the flags on these leads come from a readable audience (an empty
+    lead list simply shows 0, unless this run already knows the audience is
+    unavailable)."""
+    if REMARKETING_INFO is not None and not REMARKETING_INFO.get("available"):
+        return False
+    return all(RETARGET_COL in a and s(a.get(RETARGET_COL)) != RETARGET_NA
+               for a in leads)
+
+
+def is_intellibi_platform(label):
+    """True for the IntelliBI platform (outbound counsellor follow-up), robust to
+    case / spacing / punctuation variations: 'IntelliBI', ' intellibi ',
+    'Intelli BI', 'Intelli-BI'. Extends is_intellibi_src() (exact, case-folded)."""
+    return (is_intellibi_src(label)
+            or re.sub(r"[^a-z0-9]", "", s(label).casefold()) == INTELLIBI_SRC)
+
+
+def is_inbound_src(label):
+    """An interaction platform counts as INBOUND when it is a real platform other
+    than IntelliBI (Website, WhatsApp, Call, Walk-In, …). A blank / unknown platform
+    ('' or '—') cannot be confirmed as inbound and does not qualify."""
+    v = s(label)
+    return bool(v) and v not in ("—", "-") and not is_intellibi_platform(v)
+
+
+def has_inbound_repeat_interaction(a):
+    """True when this REPEAT lead has at least one interaction INSIDE the reporting
+    period from an inbound platform. Uses the lead's in-period interactions parsed
+    from 'Lead Interaction History' (_srcs_inper, the same list the Lead Source
+    Performance table counts) — not whether the lead ever used such a platform.
+    A lead whose in-period interactions are all IntelliBI does not qualify."""
+    return (not a.get("_is_new", False)
+            and any(is_inbound_src(x) for x in a.get("_srcs_inper", [])))
+
+
+def retarget_status(a):
+    """Final IsRetargetingLead value for one lead in THIS report period:
+         'Yes' — repeat lead, in the Google Ads remarketing audience, AND at least
+                 one in-period inbound (non-IntelliBI) interaction;
+         ''    — otherwise;
+         'N/A' — the remarketing audience could not be read."""
+    flag = s(a.get(RETARGET_COL)) if RETARGET_COL in a else RETARGET_NA
+    if flag == RETARGET_NA:
+        return RETARGET_NA
+    return RETARGET_YES if (flag == RETARGET_YES
+                            and has_inbound_repeat_interaction(a)) else ""
+
+
+def retargeting_count(leads):
+    """Repeat-Retargeting Leads = repeat leads (first enquiry before the period)
+    whose retarget_status() is 'Yes' (in the audience + an in-period inbound
+    interaction). Each lead row is counted once, so the figure equals the number
+    of 'Yes' rows in the Repeat Lead Details tab."""
+    return sum(1 for a in leads
+               if not a["_is_new"] and retarget_status(a) == RETARGET_YES)
 
 
 def upload_report_to_drive(drive, folder_id, name, xlsx_path):
@@ -3741,6 +4057,19 @@ def _run_reports():
     else:
         print(f"Enrolled-student exclusion: {len(enrolled)} enrolled mobile(s) "
               f"loaded — no rows removed.")
+
+    # ── Repeat-Retargeting Leads: Google Ads remarketing audience (read-only) ──
+    # Read ONCE per run (the remarketing script refreshes it just before this
+    # report in Sales Layer 3) and attached to every lead as a helper column BEFORE
+    # any report or masked copy is built, so Daily / Weekly / Monthly / Manual and
+    # the masked copy all use the same flags. Never fatal: an unreadable audience
+    # marks every lead "N/A" and the metric "Not available".
+    global REMARKETING_INFO
+    REMARKETING_INFO = load_remarketing_audience(sheets, drive)
+    df = flag_retargeting(df, REMARKETING_INFO)
+    if REMARKETING_INFO["available"]:
+        print(f"Remarketing audience: {int((df[RETARGET_COL] == RETARGET_YES).sum())} "
+              f"master lead row(s) are in the Google Ads remarketing audience.")
 
     # ── Conversion Chance % / Priority from the SHARED model ─────────────────
     # Train the ONE conversion model (identical to the Follow-Up report) and attach

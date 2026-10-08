@@ -2,16 +2,21 @@
 """
 Layer 3 — Sales Reports.
 
-Generates the consolidated sales-performance and follow-up-analysis reports
-from the Layer 2 dataset, then refreshes the Google Ads remarketing audience
-from the same freshly consolidated master:
+Refreshes the Google Ads remarketing audience from the freshly consolidated
+Layer 2 master, then generates the consolidated sales-performance and
+follow-up-analysis reports:
 
+    google_ads_campaign_remarketing/pyGoogleAdsRemarketingAudience.py
     pyConsolidatedLeadPerformanceReport.py
     pyLeadFollowUpAnalysisReport.py
-    google_ads_campaign_remarketing/pyGoogleAdsRemarketingAudience.py
 
-The steps are independent; they run sequentially so their logs stay clean
-and they don't contend on the Google API. Run standalone:
+The remarketing audience runs FIRST because the performance report reads its
+Full Details sheet for "Repeat-Retargeting Leads". run_script() waits for each
+step to finish before the next starts. If the audience refresh fails, the
+reports still run: the remarketing script keeps the last good audience, and the
+performance report shows the metric as "Not available" only when the sheet
+itself cannot be read. Steps run sequentially so their logs stay clean and they
+don't contend on the Google API. Run standalone:
 
     python scripts/run_layer3.py
 """
@@ -46,13 +51,15 @@ def run(logger=None) -> dict:
     remarketing = (paths.PROJECT_ROOT / "google_ads_campaign_remarketing"
                    / "pyGoogleAdsRemarketingAudience.py")
     scripts = [
+        # Google Ads remarketing audience FIRST — full refresh of the production
+        # phone sheet + the Full Details sheet (on any problem it keeps the last
+        # audience). The performance report below reads the Full Details sheet for
+        # "Repeat-Retargeting Leads", so it must run after this step completes.
+        common_utils.run_script(remarketing, label="Google Ads Remarketing Audience",
+                                timeout=timeout),
         common_utils.run_script(perf, label="Consolidated Lead Performance Report",
                                 timeout=timeout),
         common_utils.run_script(follow, label="Lead Follow-Up Analysis Report",
-                                timeout=timeout),
-        # Google Ads remarketing audience — full refresh of the production phone
-        # sheet + the Full Details sheet; on any problem it keeps the last audience.
-        common_utils.run_script(remarketing, label="Google Ads Remarketing Audience",
                                 timeout=timeout),
     ]
     ok = all(r["status"] == "SUCCESS" for r in scripts)

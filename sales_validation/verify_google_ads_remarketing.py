@@ -486,9 +486,11 @@ check("data outside columns A-B → refused, untouched", (run(fsu, dru), (prod_p
 # =============================================================================
 print("\n== 5. Scheduler / run summary ==")
 src = open(os.path.join(ROOT, "scripts", "run_layer3.py"), encoding="utf-8").read()
-check("Sales Layer 3 runs the remarketing refresh after the two reports",
-      (src.find("pyConsolidatedLeadPerformanceReport") < src.find("pyLeadFollowUpAnalysisReport")
-       < src.find("pyGoogleAdsRemarketingAudience")), True)
+_steps = src[src.find("scripts = ["):]
+check("Sales Layer 3 runs the remarketing refresh BEFORE the performance report "
+      "(it reads the Full Details sheet), then the follow-up report",
+      (0 <= _steps.find("run_script(remarketing") < _steps.find("run_script(perf")
+       < _steps.find("run_script(follow")), True)
 import exec_summary                                                         # noqa: E402
 import io                                                                   # noqa: E402
 import contextlib                                                           # noqa: E402
